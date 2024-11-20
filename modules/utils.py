@@ -10,6 +10,9 @@ import gc
 import torch
 import torch.nn.functional as F
 import numpy as np
+import json
+import random
+
 
 def pad_to_batch_size(tensor, batch_size):
     """
@@ -55,3 +58,37 @@ def get_sinusoidal_position_encoding(position, d_model):
     pos_encoding[:, :, 0::2] = torch.sin(angle_rads[:, :, 0::2])
     pos_encoding[:, :, 1::2] = torch.cos(angle_rads[:, :, 1::2])
     return pos_encoding
+
+
+def load_config(config_path):
+    """
+    Load a configuration file in JSON format.
+
+    Args:
+        config_path (str): Path to the JSON configuration file.
+
+    Returns:
+        dict: Configuration parameters as a dictionary.
+    """
+    try:
+        with open(config_path, "r") as f:
+            config = json.load(f)
+        return config
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Configuration file not found at {config_path}")
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Error decoding JSON configuration file: {e}")
+        
+def set_seed(seed):
+    """
+    Set the random seed for reproducibility.
+
+    Args:
+        seed (int): Seed value to initialize random number generators.
+    """
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False

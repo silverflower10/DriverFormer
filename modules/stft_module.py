@@ -148,9 +148,11 @@ def process_and_aggregate_parallel(tiles, df, window_size, overlap, fs, nperseg,
                 print(f"Chromosome {chrom} processing failed with error: {e}")
     return pd.DataFrame(all_aggregated_data)
 
-def run_stft_analysis(output, mut, window_size, overlap, fs, nperseg, noverlap):
-    tiles = output[['chrom', 'start', 'end']]
-    tiles['position'] = (tiles['start'] + tiles['end']) // 2
+def run_stft_analysis(output, mutation_path, window_size, overlap, fs, nperseg, noverlap):
+    tiles = output[['chrom', 'start', 'end']]   
+    mut = pd.read_pickle(mutation_path)
+    mut.columns = ['chrom', 'start', 'end', 'UUID','variantTypes', 'sample']
+    mut['position'] = (mut['start'] + mut['end']) // 2
     adjusted_binned_df = process_and_aggregate_parallel(tiles, mut, window_size, overlap, fs, nperseg, noverlap)
     
     # Normalize values
@@ -164,4 +166,5 @@ def run_stft_analysis(output, mut, window_size, overlap, fs, nperseg, noverlap):
         on=['chrom', 'start', 'end'],
         how='left'
     )
+    merged_output['position'] = (merged_output['start'] + merged_output['end']) // 2
     return merged_output
