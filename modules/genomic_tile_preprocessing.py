@@ -180,6 +180,11 @@ def integrate_covariates(hypotheses_df, covariate_paths, eligible_path):
 def integrate_genomic_tiles(fasta_file, mutation_file, covariate_paths, eligible_path, tile_start=5000, tile_end=9999, idcap=1, max_workers=4):
     hypotheses_df = tile_creation(fasta_file, mutation_file, tile_start, tile_end, idcap=idcap, max_workers=max_workers)
     output = integrate_covariates(hypotheses_df, covariate_paths, eligible_path)
+    output = output.merge(
+        hypotheses_df[['chrom', 'start', 'end', 'count']],  # count 컬럼 포함
+        on=['chrom', 'start', 'end'],  # 병합 기준
+        how='left'  # output 기준으로 병합
+    )
     return output
 
 
