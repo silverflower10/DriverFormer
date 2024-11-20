@@ -1,0 +1,30 @@
+Metadata-Version: 2.1
+Name: BORI
+Version: 0.1.0
+Summary: A Python package for Bayesian modeling and genomic data processing
+Home-page: https://github.com/silverflower10/BORI
+Author: silverflo
+Author-email: your_email@example.com
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+Requires-Dist: numpy>=1.20.0
+Requires-Dist: pandas>=1.2.0
+Requires-Dist: torch>=1.8.0
+Requires-Dist: scipy>=1.6.0
+Requires-Dist: matplotlib>=3.3.0
+Requires-Dist: seaborn>=0.11.0
+Requires-Dist: statsmodels>=0.12.0
+Requires-Dist: hdbscan>=0.8.0
+Requires-Dist: pybedtools>=0.8.0
+Requires-Dist: biopython>=1.78
+Requires-Dist: scikit-learn>=0.24.0
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"
+Requires-Dist: flake8; extra == "dev"
+Provides-Extra: bayeformers
+
+# BORI
+Bayesian-based Observation of Recurrent Indicators

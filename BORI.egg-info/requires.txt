@@ -1,0 +1,17 @@
+numpy>=1.20.0
+pandas>=1.2.0
+torch>=1.8.0
+scipy>=1.6.0
+matplotlib>=3.3.0
+seaborn>=0.11.0
+statsmodels>=0.12.0
+hdbscan>=0.8.0
+pybedtools>=0.8.0
+biopython>=1.78
+scikit-learn>=0.24.0
+
+[bayeformers]
+
+[dev]
+pytest
+flake8

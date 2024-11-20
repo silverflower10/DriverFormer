@@ -105,8 +105,6 @@ def tile_creation(fasta_file, mutation_file, tile_start, tile_end, idcap=1, max_
     # Aggregate mutation data
     result_df = parallel_process(tiles_df, mut_df, idcap=idcap, max_workers=max_workers)
     
-    # Change data types and format
-    result_df = change_dtypes(result_df)
     
     return result_df
 
