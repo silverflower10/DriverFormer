@@ -1,223 +1,143 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Wed Nov 20 17:50:21 2024
+Created on Fri Nov 22 08:34:01 2024
 
 @author: silverflo
 """
 
 import torch
-from torch.utils.data import DataLoader
 import torch.nn.functional as F
-from BORI import CustomDataset, analyze_posterior
-from modules.bori_model import create_models
-from BORI import pad_to_batch_size, clear_memory
+import torch.distributions as dist
+import random
 
-def run_BORI(config, data, output_path):
-    """Train and evaluate the model."""
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+from .utils import pad_to_batch_size
 
-    # Prepare datasets and dataloaders
-    features = config["FEATURES"]
-    stft_features = config["STFT_FEATURES"]
-    count = config["COUNT_COLUMN"]
-    
-    
+def train_one_epoch(
+    fold_dataloaders, transformer_encoder, transformer_decoder, optimizer,
+    device, nb_loss_weight, kl_loss_weight, recon_loss_weight, ce_loss_weight,
+    eps_val=1e-8, max_norm=5.0
+):
+    """
+    한 epoch 동안 모든 fold를 학습
+    """
+    fold_order = list(fold_dataloaders.keys())
+    random.shuffle(fold_order)
+    epoch_loss = 0.0
+    total_steps = 0
 
-    datasets = {
-        chrom: CustomDataset(chrom_data, features, stft_features, count, overlap_size=config["BATCH_OVERLAP"], is_train=True)
-        for chrom, chrom_data in data.groupby("chrom")
-    }
-    train_dataloaders = {
-        chrom: DataLoader(dataset, batch_size=config["BATCH_SIZE"], shuffle=True)
-        for chrom, dataset in datasets.items()
-    }
+    for fid in fold_order:
+        dataloader = fold_dataloaders[fid]
 
-    # Initialize models
-    encoder, decoder = create_models(config, device)
+        for batch_all, batch_prob, batch_positions, batch_chrom_ids in dataloader:
+            batch_all = batch_all.to(device)
+            batch_prob = batch_prob.to(device)
+            batch_positions = batch_positions.to(device)
+            batch_chrom_ids = batch_chrom_ids.to(device)
 
+            # 패딩
+            batch_all, padding_mask_all = pad_to_batch_size(batch_all, dataloader.batch_size)
+            batch_prob, padding_mask_prob = pad_to_batch_size(batch_prob, dataloader.batch_size)
+            batch_positions, padding_mask_positions = pad_to_batch_size(batch_positions, dataloader.batch_size)
+            batch_chrom_ids, padding_mask_chrom = pad_to_batch_size(batch_chrom_ids, dataloader.batch_size)
 
-    # Define optimizer
-    optimizer = torch.optim.Adam(
-        list(encoder.parameters()) + list(decoder.parameters()), lr=config["LEARNING_RATE"]
-    )
+            valid_indices = padding_mask_all.bool()
+            if valid_indices.sum() == 0:
+                continue
 
-    # Training loop
-    for epoch in range(config["NUM_EPOCHS"]):
-        print(f"\n===== epoch {epoch + 1}/{config['NUM_EPOCHS']} START =====")
-        
-        all_counts_tensors = []
-        all_padding_masks = [] 
-        all_feature = []
-        all_position = []
-        all_loss = []
-    
-        for chrom, dataloader in train_dataloaders.items():
-            counts_per_chrom = []
-            loss_per_chrom = 0
-            feature_per_chrom = []
-            position_per_chrom = []
-            padding_masks_per_chrom = []
-            
-            for batch_all, batch_stft, batch_positions, batch_counts in dataloader:
-                batch_all = batch_all.to(device)
-                batch_stft = batch_stft.to(device)
-                batch_counts = batch_counts.to(device)
-                batch_positions = batch_positions.to(device)
-        
-              
-                batch_all, padding_mask_all = pad_to_batch_size(batch_all, config['BATCH_SIZE'])
-                batch_stft, padding_mask_stft = pad_to_batch_size(batch_stft, config['BATCH_SIZE'])
-                batch_counts, padding_mask_counts = pad_to_batch_size(batch_counts, config['BATCH_SIZE'])
-                batch_positions, padding_mask_positions = pad_to_batch_size(batch_positions, config['BATCH_SIZE'])
+            batch_all = batch_all[valid_indices]
+            batch_prob = batch_prob[valid_indices]
+            batch_positions = batch_positions[valid_indices]
+            batch_chrom_ids = batch_chrom_ids[valid_indices]
 
-                valid_indices = padding_mask_all.bool()
-                if valid_indices.sum() == 0:
-                    continue 
-        
-                batch_all = batch_all[valid_indices]
-                batch_stft = batch_stft[valid_indices]
-                batch_counts = batch_counts[valid_indices]
-                batch_positions = batch_positions[valid_indices]
-        
-                feature_per_chrom.append(batch_all.cpu().detach())
-                position_per_chrom.append(batch_positions.cpu().detach())
-                padding_masks_per_chrom.append(padding_mask_all.cpu())
-        
-                batch_counts = batch_counts.float()
-                batch_all = batch_all.float()
-                batch_stft = batch_stft.float().to(device)
-                batch_positions = batch_positions.float()
-   
-                optimizer.zero_grad()
-  
-                # Encoder 출력 계산
-                encoder_output = encoder(batch_all, batch_positions, device)
+            batch_all = batch_all.float()
+            batch_prob = batch_prob.float()
+            batch_positions = batch_positions.float()
 
-                # Decoder를 통해 pred_lambda, pred_alpha 예측
-                pred_lambda, pred_alpha, class_probs = decoder(batch_stft.unsqueeze(-1), encoder_output, batch_positions, device)
+            optimizer.zero_grad()
 
-                # Lambda와 Alpha 값 클램핑으로 안정성 확보
-                pred_lambda = torch.clamp(pred_lambda, min=1e-6, max=1e6)
-                pred_alpha = torch.clamp(pred_alpha, min=1e-6, max=1e6)
-        
-                # 3. 이진 분류 손실 계산 (count == 0)
-                classification_loss = F.binary_cross_entropy(
-                class_probs, (batch_counts == 0).float()
-                ) * config["CLASSIFICATION_LOSS_WEIGHT"]
+            prob_values = batch_prob[:, :, 0]    # (B, S)
+            fold_sample_count = batch_prob[:, :, 1]  # (B, S)
+            B, S, F_dim = batch_all.size()
 
-        
-                # 데이터 포인트별로 0인 데이터를 범주형으로 처리
-                zero_indices = (batch_counts == 0)
-                nonzero_indices = (batch_counts != 0)
+            # Encoder
+            encoder_output = transformer_encoder(batch_all, batch_positions, batch_chrom_ids, device)
+            decoder_input = prob_values.unsqueeze(-1)  # (B, S, 1)
 
+            # Decoder
+            pred_probability, pred_variance, mu, logvar = transformer_decoder(decoder_input, encoder_output, batch_positions, device)
+            pred_probability = pred_probability.squeeze(-1)  # (B, S)
+            pred_variance = pred_variance.squeeze(-1)        # (B, S)
 
-                # 데이터 포인트별로 과산포 여부 판단 후 적절한 분포 선택
-                sampled_counts_list = []
-                nb_loss_list = []
-        
-                for i in range(batch_counts.size(0)):  # 배치의 각 데이터 포인트에 대해 반복
-                    count_value = batch_counts[i].item()  # 실제 count 값
-                    lambda_value = pred_lambda[i].item()  # 예측된 lambda 값
+            observed_count = torch.round(prob_values * fold_sample_count).long()
 
-           
-                    if count_value > lambda_value:
-                        # Gamma-Poisson(Negative Binomial) 사용
-                        nb_dist = torch.distributions.NegativeBinomial(
-                            total_count=torch.exp(pred_alpha[i]),  # Gamma-Poisson (Negative Binomial)
-                            probs=torch.sigmoid(pred_lambda[i])
-                        )
-                    else:
-                        # Poisson 분포 사용
-                        nb_dist = torch.distributions.Poisson(
-                            rate=torch.sigmoid(pred_lambda[i])  # Poisson
-                        )
-                        pred_alpha[i] = torch.zeros_like(pred_alpha[i])
+            mu_val = fold_sample_count * pred_probability
+            sigma2_val = pred_variance
 
-                    # 각 데이터 포인트별 샘플링 및 log_prob 계산
-                    sampled_counts = nb_dist.sample()
-                    sampled_counts = sampled_counts.unsqueeze(0) 
-                    sampled_counts_list.append(sampled_counts)
-            
+            poisson_mask = (sigma2_val < mu_val)
+            nb_mask = ~poisson_mask
 
+            mu_nb = mu_val[nb_mask]
+            sigma2_nb = sigma2_val[nb_mask]
 
-                    # log_prob에서 NaN 발생 여부 확인 및 처리
-                    log_prob = nb_dist.log_prob(batch_counts[i])
-                    if torch.isnan(log_prob).any():
-                        log_prob = torch.zeros_like(log_prob)  # NaN 발생 시 0으로 처리
-                    nb_loss_list.append(-log_prob.mean() * config['NB_LOSS_WEIGHT'])
+            r_val = (mu_nb**2) / (sigma2_nb - mu_nb + eps_val)
+            p_val = r_val / (r_val + mu_nb + eps_val)
 
-                # 전체 배치에 대해 Reconstruction Loss 및 총 손실 계산
-                sampled_counts = torch.stack(sampled_counts_list).to(device)
-        
+            r_flat = torch.zeros_like(mu_val.view(-1))
+            p_flat = torch.zeros_like(mu_val.view(-1))
 
-                # Reconstruction Loss 계산 (NaN 방지)
-                recon_loss = F.smooth_l1_loss(sampled_counts, batch_counts)
-                if torch.isnan(recon_loss).any():
-                    recon_loss = torch.zeros_like(recon_loss)  # NaN 발생 시 0으로 처리
-                recon_loss = recon_loss * config['RECON_LOSS_WEIGHT']
+            r_flat[nb_mask.view(-1)] = r_val.view(-1)
+            p_flat[nb_mask.view(-1)] = p_val.view(-1)
 
-                nb_loss = torch.stack(nb_loss_list).mean() 
-                if torch.isnan(nb_loss).any():
-                    nb_loss = torch.zeros_like(nb_loss)
+            observed_count_flat = observed_count.view(-1)
 
-                loss_per_chrom += recon_loss.item()
+            nb_dist = dist.NegativeBinomial(
+                total_count=r_flat[nb_mask.view(-1)],
+                probs=p_flat[nb_mask.view(-1)]
+            )
+            log_prob_nb = nb_dist.log_prob(observed_count_flat[nb_mask.view(-1)])
 
-                # 베이지안 정규화 및 KL 손실
-                log_prior = decoder.transformer_decoder.log_prior()
-                log_variational_posterior = decoder.transformer_decoder.log_variational_posterior()
+            poisson_dist = dist.Poisson(mu_val[poisson_mask])
+            log_prob_poisson = poisson_dist.log_prob(observed_count_flat[poisson_mask.view(-1)])
 
-                # KL divergence-like term for Bayesian regularization
-                kl_loss = ((log_variational_posterior - log_prior) / len(dataloader)) * config['KL_LOSS_WEIGHT']
-                if torch.isnan(kl_loss).any():
-                    kl_loss = torch.zeros_like(kl_loss)  # NaN 발생 시 처리
+            log_prob_combined = torch.zeros_like(observed_count_flat, dtype=torch.float, device=device)
+            log_prob_combined[nb_mask.view(-1)] = log_prob_nb
+            log_prob_combined[poisson_mask.view(-1)] = log_prob_poisson
 
-                # Total loss combines reconstruction loss, negative binomial loss, and KL divergence
-                total_loss = recon_loss + nb_loss + kl_loss + classification_loss
-                total_loss.backward()
+            log_prob_combined[torch.isnan(log_prob_combined)] = 0.0
 
-                # CPU로 데이터 이동 후 저장
-                batch_counts_cpu = batch_counts.detach().cpu()
-                counts_per_chrom.append(batch_counts_cpu)
+            nb_loss = -log_prob_combined.mean() * nb_loss_weight
+            if torch.isnan(nb_loss):
+                nb_loss = torch.zeros_like(nb_loss)
 
-                # Gradient Clipping 적용
-                torch.nn.utils.clip_grad_norm_(list(encoder.parameters()) + list(decoder.parameters()), max_norm=5.0)
+            mu_flat = mu.view(-1, mu.size(-1))
+            logvar_flat = logvar.view(-1, logvar.size(-1))
 
-                # optimizer step
-                optimizer.step()
+            kl_div = -0.5 * torch.mean(
+                torch.sum(1 + logvar_flat - mu_flat.pow(2) - logvar_flat.exp(), dim=1)
+            )
+            kl_loss = kl_div * kl_loss_weight
+            if torch.isnan(kl_loss):
+                kl_loss = torch.zeros_like(kl_loss)
 
-            # 크로모좀 단위로 에러와 재구성된 값 저장
-            all_counts_tensors.append(torch.cat(counts_per_chrom, dim=0))
-            all_loss.append(loss_per_chrom)
+            mean = mu_val  # NB나 Poisson 모두 mean = mu_val
+            recon_loss = F.mse_loss((mean+1).log(), (observed_count.float()+1).log()) * recon_loss_weight
+            if torch.isnan(recon_loss):
+                recon_loss = torch.zeros_like(recon_loss)
 
-            clear_memory()
-            torch.cuda.empty_cache()
+            prob_ce_loss = F.binary_cross_entropy(pred_probability, prob_values) * ce_loss_weight
 
-        avg_loss_per_epoch = sum(all_loss) / len(all_loss)
-        print(f"Average Loss for Epoch {epoch + 1}: {avg_loss_per_epoch:.4f}")
+            total_loss = nb_loss + kl_loss + recon_loss + prob_ce_loss
+            total_loss.backward()
 
+            torch.nn.utils.clip_grad_norm_(
+                list(transformer_encoder.parameters()) + list(transformer_decoder.parameters()),
+                max_norm=max_norm
+            )
+            optimizer.step()
 
-        clear_memory()
-        torch.cuda.empty_cache()
-    
+            epoch_loss += total_loss.item()
+            total_steps += 1
 
-
-
-    # Evaluation
-    test_datasets = {
-        chrom: CustomDataset(chrom_data, features, stft_features, count, overlap_size=0, is_train=False)
-        for chrom, chrom_data in data.groupby("chrom")
-    }
-    test_dataloaders = {
-        chrom: DataLoader(dataset, batch_size=config["BATCH_SIZE"])
-        for chrom, dataset in test_datasets.items()
-    }
-    results = analyze_posterior(encoder, decoder, test_dataloaders, device)
-    results.to_pickle(output_path)
-
-
-    print("BORI is completed,,,")
-    print() 
-    print("Evaluation results:")
-    print(results.head())
+    return epoch_loss / total_steps if total_steps > 0 else 0.0
 

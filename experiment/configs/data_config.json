@@ -1,0 +1,35 @@
+{
+    "TILE_START": 49000,
+    "TILE_END": 49999,
+    "IDCAP": 1,
+    "MAX_WORKERS": 4,
+    "FASTA_FILE": "/home/silverflo/breast_cancer_fishhook/HMFtools-Resources_ref_genome_37_Homo_sapiens.GRCh37.GATK.illumina.fasta",
+    "MUTATION_FILE": "/home/silverflo/TransformerVAE/Breastcancer/pkl/all_mutations.pkl",
+    "COVARIATE_PATHS": {
+        "activchrom": "/home/silverflo/TransformerVAE/Breastcancer/cov/activechrom.pkl",
+        "hetchrom": "/home/silverflo/TransformerVAE/Breastcancer/cov/hetchrom.pkl",
+        "LINE": "/home/silverflo/TransformerVAE/Breastcancer/cov/line.pkl",
+        "SINE": "/home/silverflo/TransformerVAE/Breastcancer/cov/sine.pkl",
+        "LTR": "/home/silverflo/TransformerVAE/Breastcancer/cov/ltr.pkl",
+        "GC": "/home/silverflo/TransformerVAE/Breastcancer/cov/gc.pkl",
+        "Mapability": "/home/silverflo/TransformerVAE/Breastcancer/mapability.pkl",
+        "MCF7_DNAase": "/home/silverflo/TransformerVAE/Breastcancer/cov/mcf_dnase.pkl",
+        "T47D_DNAase": "/home/silverflo/TransformerVAE/Breastcancer/cov/t47d_dnase.pkl"
+    },
+    "ELIGIBLE_PATH": "/home/silverflo/TransformerVAE/Breastcancer/cov/eligible.pkl",
+    "COLUMNS_TO_NORMALIZE": [
+        "activchrom",
+        "hetchrom",
+        "LINE",
+        "SINE",
+        "LTR",
+        "GC",
+        "Mapability",
+        "MCF7_DNAase",
+        "T47D_DNAase"
+    ],
+    "SEED": 42,
+    "N_FOLDS": 5,
+    "FOLD_ASSIGNMENT": "random",
+    "LOG_FOLD_SAMPLE_COUNT": true
+}

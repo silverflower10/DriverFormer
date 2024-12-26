@@ -1,0 +1,36 @@
+{
+    "MODEL": {
+        "E_MODEL": 64,
+        "D_MODEL": 64,
+        "NHEAD": 8,
+        "NUM_ENCODER_LAYERS": 6,
+        "NUM_DECODER_LAYERS": 6,
+        "DIM_FEEDFORWARD": 256,
+        "DROPOUT": 0.1
+    },
+    "TRAINING": {
+        "LEARNING_RATE": 0.0001,
+        "NUM_EPOCHS": 50,
+        "BATCH_SIZE": 128,
+        "RECON_LOSS_WEIGHT": 10,
+        "KL_LOSS_WEIGHT": 0.1,
+        "NB_LOSS_WEIGHT": 10,
+        "CE_LOSS_WEIGHT": 10
+    },
+    "FEATURES": [
+        "activchrom",
+        "hetchrom",
+        "LINE",
+        "SINE",
+        "LTR",
+        "GC",
+        "Mapability",
+        "MCF7_DNAase"
+    ],
+    "PROB_COLUMNS": [
+        "prob",
+        "fold_sample_count"
+    ],
+    "SEQUENCE_LENGTH": 99,
+    "STRIDE": 10
+}

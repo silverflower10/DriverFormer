@@ -14,6 +14,7 @@ import json
 import random
 
 
+
 def pad_to_batch_size(tensor, batch_size):
     """
     Pads a tensor to the specified batch size.
@@ -36,6 +37,7 @@ def pad_to_batch_size(tensor, batch_size):
         padding_mask = torch.ones(current_size)
 
     return tensor, padding_mask
+
 
 def clear_memory():
     """
@@ -92,3 +94,4 @@ def set_seed(seed):
     torch.cuda.manual_seed(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
+

@@ -1,0 +1,44 @@
+{
+    "MODEL_TYPE": "basic",
+    "E_MODEL": 64,
+    "D_MODEL": 64,
+    "NHEAD": 8,
+    "NUM_ENCODER_LAYERS": 6,
+    "NUM_DECODER_LAYERS": 6,
+    "E_FEEDFORWARD": 256,
+    "D_FEEDFORWARD": 256,
+    "DIM_FEEDFORWARD": 256,
+    "DROPOUT": 0.1,
+    "WD": 1e-05,
+    "LEARNING_RATE": 1e-05,
+    "BATCH_SIZE": 128,
+    "BATCH_OVERLAP": 32,
+    "NUM_EPOCHS": 10,
+    "RECON_LOSS_WEIGHT": 10,
+    "KL_LOSS_WEIGHT": 1,
+    "NB_LOSS_WEIGHT": 1,
+    "LAMBDA": 0.3,
+    "CE_LOSS_WEIGHT": 100,
+    "FEATURES": [
+        "activchrom",
+        "hetchrom",
+        "LINE",
+        "SINE",
+        "LTR",
+        "GC",
+        "Mapability",
+        "MCF7_DNAase",
+        "T47D_DNAase"
+    ],
+    "STFT_FEATURES": [
+        "mean_power",
+        "max_energy_freq",
+        "variability"
+    ],
+    "COUNT_COLUMN": "count",
+    "PROB_COLUMNS": [
+        "prob",
+        "fold_sample_count"
+    ],
+    "SEED": 42
+}

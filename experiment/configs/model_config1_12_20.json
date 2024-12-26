@@ -1,0 +1,39 @@
+{
+    "MODEL_TYPE": "variational",
+    "E_MODEL": 64,
+    "D_MODEL": 64,
+    "NHEAD": 8,
+    "NUM_ENCODER_LAYERS": 6,
+    "NUM_DECODER_LAYERS": 6,
+    "E_FEEDFORWARD": 256,
+    "D_FEEDFORWARD": 256,
+    "DIM_FEEDFORWARD": 256,
+    "DROPOUT": 0.1,
+    "LEARNING_RATE": 1e-05,
+    "BATCH_SIZE": 128,
+    "SEQUENCE": 99,
+    "STRIDE": 50,
+    "NUM_EPOCHS": 10,
+    "RECON_LOSS_WEIGHT": 10,
+    "KL_LOSS_WEIGHT": 0.1,
+    "NB_LOSS_WEIGHT": 1,
+    "CE_LOSS_WEIGHT": 100,
+    "FEATURES": [
+        "activchrom",
+        "hetchrom",
+        "LINE",
+        "SINE",
+        "LTR",
+        "GC",
+        "Mapability",
+        "MCF7_DNAase",
+        "T47D_DNAase"
+    ],
+    "COUNT_COLUMN": "count",
+    "PROB_COLUMNS": [
+        "prob",
+        "fold_sample_count"
+    ],
+    "NUM_CHROMS": null,
+    "SEED": 42
+}
