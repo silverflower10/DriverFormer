@@ -1,4 +1,3 @@
-# DriverFormer 
 # DriverFormer
 
 A deep learning framework for **genome-wide driver discovery**.
