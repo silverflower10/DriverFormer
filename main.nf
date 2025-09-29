@@ -128,7 +128,7 @@ process DRIVERFORMER_RUN {
 
   # 핵심 패키지 보충
   MISSING=$(python - <<'PY'
-mods = ["pandas","pyarrow","scikit-learn","tqdm","pyyaml","matplotlib"]
+mods = ["pandas","pyarrow","scikit-learn","tqdm","pyyaml","matplotlib","rotary_embedding_torch","einops"]
 import importlib.util
 print(" ".join([m for m in mods if not importlib.util.find_spec(m)]))
 PY
