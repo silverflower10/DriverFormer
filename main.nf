@@ -3,43 +3,47 @@ nextflow.enable.dsl = 2
 // ==============================
 // Parameters
 // ==============================
-params.pipeline_only      = params.pipeline_only      ?: false
-params.mutations_file     = params.mutations_file     ?: null
-params.all_pred           = params.all_pred           ?: null
+params.pipeline_only       = params.pipeline_only       ?: false
+params.mutations_file      = params.mutations_file      ?: null
+params.all_pred            = params.all_pred            ?: null
 
-params.out_dir            = params.out_dir            ?: "results/run"
-params.post_dir           = params.post_dir           ?: "${params.out_dir}/postproc"
+// (NEW) 외부에서 CLS/FEAT 경로로 받는 옵션 (s3://, gs://, file://, 로컬 경로 등)
+params.cls_file            = params.cls_file            ?: null
+params.feat_file           = params.feat_file           ?: null
 
-params.lr                 = params.lr                 ?: 2e-4
-params.batch_size         = params.batch_size         ?: 128
-params.epochs             = params.epochs             ?: 20
-params.segment_lengths    = params.segment_lengths    ?: [10,50,100]
-params.label_roll         = params.label_roll         ?: true
-params.label_roll_width   = params.label_roll_width   ?: 2
-params.save_attention     = params.save_attention     ?: false
+params.out_dir             = params.out_dir             ?: "results/run"
+params.post_dir            = params.post_dir            ?: "${params.out_dir}/postproc"
 
-params.d_model            = params.d_model            ?: 768
-params.nhead              = params.nhead              ?: 8
-params.num_layers         = params.num_layers         ?: 6
-params.dim_feedforward    = params.dim_feedforward    ?: 3072
-params.dropout            = params.dropout            ?: 0.2
-params.max_seq_len        = params.max_seq_len        ?: 1024
-params.overlap_factor     = params.overlap_factor     ?: 0.3
-params.use_mad            = params.use_mad            ?: true
-params.huber_factor       = params.huber_factor       ?: 3.0
-params.cutmix_p           = params.cutmix_p           ?: 0.2
-params.num_data_workers   = params.num_data_workers   ?: 8
-params.torch_threads      = params.torch_threads      ?: 8
-params.len_alpha          = params.len_alpha          ?: 0.5
-params.res_beta           = params.res_beta           ?: 0.5
+params.lr                  = params.lr                  ?: 2e-4
+params.batch_size          = params.batch_size          ?: 128
+params.epochs              = params.epochs              ?: 20
+params.segment_lengths     = params.segment_lengths     ?: [10,50,100]
+params.label_roll          = params.label_roll          ?: true
+params.label_roll_width    = params.label_roll_width    ?: 2
+params.save_attention      = params.save_attention      ?: false
+
+params.d_model             = params.d_model             ?: 768
+params.nhead               = params.nhead               ?: 8
+params.num_layers          = params.num_layers          ?: 6
+params.dim_feedforward     = params.dim_feedforward     ?: 3072
+params.dropout             = params.dropout             ?: 0.2
+params.max_seq_len         = params.max_seq_len         ?: 1024
+params.overlap_factor      = params.overlap_factor      ?: 0.3
+params.use_mad             = params.use_mad             ?: true
+params.huber_factor        = params.huber_factor        ?: 3.0
+params.cutmix_p            = params.cutmix_p            ?: 0.2
+params.num_data_workers    = params.num_data_workers    ?: 8
+params.torch_threads       = params.torch_threads       ?: 8
+params.len_alpha           = params.len_alpha           ?: 0.5
+params.res_beta            = params.res_beta            ?: 0.5
 
 // pipeline (LLR→GMM→DP)
-params.run_pipeline       = params.run_pipeline       ?: true
-params.pipeline_gmm_auto  = params.pipeline_gmm_auto  ?: false
-params.pipeline_gmm_k     = params.pipeline_gmm_k     ?: 2
-params.pipe_beta          = params.pipe_beta          ?: 1.0
-params.pipe_gamma         = params.pipe_gamma         ?: 0.0
-params.pipeline_dp_gap_bp = params.pipeline_dp_gap_bp ?: 0
+params.run_pipeline        = params.run_pipeline        ?: true
+params.pipeline_gmm_auto   = params.pipeline_gmm_auto   ?: false
+params.pipeline_gmm_k      = params.pipeline_gmm_k      ?: 2
+params.pipe_beta           = params.pipe_beta           ?: 1.0
+params.pipe_gamma          = params.pipe_gamma          ?: 0.0
+params.pipeline_dp_gap_bp  = params.pipeline_dp_gap_bp  ?: 0
 params.pipeline_chunk_size    = params.pipeline_chunk_size    ?: 1_000_000
 params.pipeline_chunk_overlap = params.pipeline_chunk_overlap ?: 100_000
 params.pipeline_min_distance  = params.pipeline_min_distance  ?: 0
@@ -48,21 +52,21 @@ params.pipeline_sample_frac   = params.pipeline_sample_frac   ?: 0.01
 params.pipeline_presmooth_bins= params.pipeline_presmooth_bins?: 2
 
 // post-selection
-params.postsel_fdr_method = params.postsel_fdr_method ?: 'storey'
-params.postsel_bootstrap  = params.postsel_bootstrap  ?: 400
-params.postsel_lambda_start = params.postsel_lambda_start ?: 0.20
-params.postsel_lambda_end   = params.postsel_lambda_end   ?: 0.95
-params.postsel_lambda_step  = params.postsel_lambda_step  ?: 0.01
-params.postsel_pi0_floor    = params.postsel_pi0_floor    ?: 0.01
-params.postsel_pi0_ceil     = params.postsel_pi0_ceil     ?: 1.0
+params.postsel_fdr_method  = params.postsel_fdr_method  ?: 'storey'
+params.postsel_bootstrap   = params.postsel_bootstrap   ?: 400
+params.postsel_lambda_start= params.postsel_lambda_start?: 0.20
+params.postsel_lambda_end  = params.postsel_lambda_end  ?: 0.95
+params.postsel_lambda_step = params.postsel_lambda_step ?: 0.01
+params.postsel_pi0_floor   = params.postsel_pi0_floor   ?: 0.01
+params.postsel_pi0_ceil    = params.postsel_pi0_ceil    ?: 1.0
 
 // Release download options
-params.use_release  = params.use_release ?: false
-params.gh_repo      = params.gh_repo     ?: null         // e.g. silverflower10/DriverFormer
-params.release_tag  = params.release_tag ?: null         // e.g. breast-data-v1
-params.asset_name   = params.asset_name  ?: 'parts'      // 'parts' or tar.gz filename
-params.asset_sha256 = params.asset_sha256?: null         // optional for tar.gz
-params.gh_token     = params.gh_token    ?: null         // private release only
+params.use_release   = params.use_release  ?: false
+params.gh_repo       = params.gh_repo      ?: null     // e.g. silverflower10/DriverFormer
+params.release_tag   = params.release_tag  ?: null     // e.g. breast-data-v1
+params.asset_name    = params.asset_name   ?: 'parts'  // 'parts' or tar.gz filename
+params.asset_sha256  = params.asset_sha256 ?: null
+params.gh_token      = params.gh_token     ?: null
 
 // ==============================
 // Helpers
@@ -144,11 +148,25 @@ if (params.pipeline_only && !params.all_pred)
 ALL_PRED = params.pipeline_only ? Channel.fromPath(params.all_pred, checkIfExists: true)
                                 : Channel.empty()
 
+// (NEW) CLS/FEAT 입력 경로 처리
+if ( (params.cls_file && !params.feat_file) || (!params.cls_file && params.feat_file) )
+  exit 1, "ERROR: --cls_file and --feat_file must be provided together"
+
+Channel CLS_CH
+Channel FEAT_CH
+
+if (params.cls_file && params.feat_file) {
+  CLS_CH  = Channel.fromPath(params.cls_file,  checkIfExists: true)
+  FEAT_CH = Channel.fromPath(params.feat_file, checkIfExists: true)
+} else {
+  def out = params.use_release ? DOWNLOAD_BREAST_RELEASE() : LOCAL_BREAST()
+  CLS_CH  = out.cls
+  FEAT_CH = out.feat
+}
+
 // ==============================
 // Processes
 // ==============================
-
-// ----(1) GitHub Release downloader (Python only) ----
 process DOWNLOAD_BREAST_RELEASE {
   tag "download:${params.release_tag ?: 'NA'}"
   cpus 1
@@ -156,8 +174,8 @@ process DOWNLOAD_BREAST_RELEASE {
   time '3h'
 
   output:
-  path "cls_embedding.pkl"
-  path "feature_dict_BRCA.pkl"
+  path "cls_embedding.pkl",     emit: cls
+  path "feature_dict_BRCA.pkl", emit: feat
 
   when:
   params.use_release
@@ -220,7 +238,7 @@ process DOWNLOAD_BREAST_RELEASE {
               with open(fn,"rb") as p: out.write(p.read())
 
   else:
-      url = f"https://github.com/{GH_REPO}/releases/download/{TAG}/{ASSET}"
+      url = f"https://github.com/${GH_REPO}/releases/download/${TAG}/${ASSET}"
       print("[DL]", ASSET)
       download_to(url, ASSET, headers=hdr)
       with tarfile.open(ASSET, "r:gz") as tf:
@@ -232,13 +250,14 @@ process DOWNLOAD_BREAST_RELEASE {
   """
 }
 
-// ----(2) repo-local 데이터(또는 분할 파트) 사용 ----
 process LOCAL_BREAST {
   tag "local"
   cpus 1; memory '1 GB'; time '1h'
-  output: path "cls_embedding.pkl", emit: cls
-          path "feature_dict_BRCA.pkl", emit: feat
-  when: !params.use_release
+  output:
+  path "cls_embedding.pkl",     emit: cls
+  path "feature_dict_BRCA.pkl", emit: feat
+  when:
+  !params.use_release
   script:
   """
   set -euo pipefail
@@ -256,14 +275,14 @@ process LOCAL_BREAST {
   """
 }
 
-// ----(3) Train (+optional pipeline) ----
 process DRIVERFORMER_TRAIN {
   tag "train"
   cpus 8; memory '32 GB'; time '48h'
   publishDir params.out_dir, mode: 'copy', overwrite: true
-  input: path cls_pkl
-         path feat_pkl
-         path mut_file
+  input:
+  path cls_pkl
+  path feat_pkl
+  path mut_file
   script:
   def A = trainArgs()
   """
@@ -280,12 +299,12 @@ PY
   """
 }
 
-// ----(4) Pipeline-only ----
 process DRIVERFORMER_PIPE {
   tag "pipe"
   cpus 4; memory '16 GB'; time '12h'
   publishDir params.post_dir, mode: 'copy', overwrite: true
-  input: path all_pred
+  input:
+  path all_pred
   script:
   def B = pipeArgs()
   """
@@ -310,6 +329,17 @@ workflow {
     DRIVERFORMER_PIPE( ALL_PRED )
     return
   }
-  def out = params.use_release ? DOWNLOAD_BREAST_RELEASE() : LOCAL_BREAST()
-  DRIVERFORMER_TRAIN( out.cls, out.feat, MUT_FILE )
+
+  def CLS_USE
+  def FEAT_USE
+  if (params.cls_file && params.feat_file) {
+    CLS_USE  = CLS_CH
+    FEAT_USE = FEAT_CH
+  } else {
+    def out = params.use_release ? DOWNLOAD_BREAST_RELEASE() : LOCAL_BREAST()
+    CLS_USE  = out.cls
+    FEAT_USE = out.feat
+  }
+
+  DRIVERFORMER_TRAIN( CLS_USE, FEAT_USE, MUT_FILE )
 }
