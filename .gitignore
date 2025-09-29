@@ -12,3 +12,8 @@ __pycache__/
 main.nf.bak_*
 nextflow.config.bak_*
 release_assets_*/
+
+# local backups & release assets
+main.nf.bak_*
+nextflow.config.bak_*
+release_assets_*/
