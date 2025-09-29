@@ -1,0 +1,3 @@
+release_assets_*/
+*.tar.gz
+.git.bad*/
