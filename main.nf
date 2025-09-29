@@ -1,9 +1,7 @@
-// main.nf — DriverFormer minimal DSL2 workflow (no package install; run repo script directly)
+// main.nf — DriverFormer DSL2 (fixed: channels in workflow; repo-run; debug kept)
 nextflow.enable.dsl = 2
 
-// -------------------------
-// Params (기본값은 로컬 실행 예시와 동일하게 맞춤)
-// -------------------------
+// ===== Params =====
 params.cls_file              = null
 params.feat_file             = null
 params.mutations_file        = null
@@ -57,41 +55,27 @@ params.postsel_lambda_step   = 0.01
 params.postsel_pi0_floor     = 0.01
 params.postsel_pi0_ceil      = 1.0
 
-// -------------------------
-// Helpers
-// -------------------------
-def checkRequired(name, val) {
-  if( !val ) error "Missing required param: --${name}"
-}
+// ===== Helpers =====
+def need(name, val) { if(!val) error "Missing required param: --${name}" }
 
-// -------------------------
-// Process
-// -------------------------
-process DRIVERFORMER_TRAIN {
-  tag "driverformer-train"
-
+// ===== Process =====
+process DRIVERFORMER_RUN {
+  tag "driverformer"
   cpus 8
   memory '32 GB'
   time '72h'
-
   publishDir "${params.out_dir}", mode: 'copy', overwrite: true
 
+  // ✔ 여기서는 '채널 변수'만 받습니다
   input:
-    path CLS  from file(params.cls_file)
-    path FEAT from file(params.feat_file)
-    path MUTS from file(params.mutations_file)
+    path CLS
+    path FEAT
+    path MUTS
 
   output:
     path "stdout.txt"
     path "stderr.txt"
-    path "${params.out_dir}", emit: OUTDIR, optional: true
-    path "${params.post_dir}", emit: POSTDIR, optional: true
 
-  /*
-    - 패키지 설치 없이 리포 소스 직접 실행
-    - trainDriverFormer.py 는 리포 루트에 있다고 가정(projectDir)
-    - 필요시 파일명/경로만 바꾸면 됨
-  */
   script:
   """
   set -euo pipefail
@@ -106,32 +90,42 @@ process DRIVERFORMER_TRAIN {
   export MKL_NUM_THREADS=${task.cpus}
   export OPENBLAS_NUM_THREADS=${task.cpus}
   export NUMEXPR_NUM_THREADS=${task.cpus}
+  export PYTHONPATH="${projectDir}:\$PYTHONPATH"
 
-  # GPU/환경 정보
-  echo "===== ENV CHECK ====="
+  # ────── 디버그 정보 (네 블록 그대로) ──────
   nvidia-smi || true
   which python || true
-  python - <<'PY'
-import torch, sys, os
+  python - <<'PYINFO'
+import torch, sys, importlib
 print("python =", sys.executable)
 print("torch  =", torch.__version__,
       "| cuda?", torch.cuda.is_available(),
       "| #GPU =", torch.cuda.device_count())
-if torch.cuda.is_available():
-    print("GPU 0 =", torch.cuda.get_device_name(0))
-print("CUDA (torch) =", torch.version.cuda)
+try:
+    m = importlib.import_module("driverformer")
+    print("driverformer version:", getattr(m, "__version__", "NA"))
+except Exception as e:
+    print("driverformer import failed:", repr(e))
+PYINFO
+  echo "================================================="
+
+  # 모듈 존재 여부에 따라 분기
+  LAUNCH=\$(python - <<'PY'
+import importlib
+try:
+    import driverformer  # noqa
+    print("module")
+except Exception:
+    print("nomodule")
 PY
-  echo "====================="
+)
+  echo "[INFO] launch mode = \${LAUNCH}"
 
-  # 리포 소스 직접 참조
-  export PYTHONPATH="${projectDir}:\$PYTHONPATH"
-
-  # === 실행 ===
-  python -u "${projectDir}/trainDriverFormer.py" \\
-    --cls-file            "${CLS}" \\
-    --feat-file           "${FEAT}" \\
-    --mutations-file      "${MUTS}" \\
-    --out-dir             "${params.out_dir}" \\
+  COMMON_ARGS="\\
+    --cls-file            '${CLS}' \\
+    --feat-file           '${FEAT}' \\
+    --mutations-file      '${MUTS}' \\
+    --out-dir             '${params.out_dir}' \\
     --lr                  ${params.lr} \\
     --batch-size          ${params.batch_size} \\
     --epochs              ${params.epochs} \\
@@ -144,17 +138,14 @@ PY
     --max-seq-len         ${params.max_seq_len} \\
     --segment-lengths     ${params.segment_lengths.join(' ')} \\
     --overlap-factor      ${params.overlap_factor} \\
-    ${ params.use_mad           ? '--use-mad'           : '' } \\
     --huber-factor        ${params.huber_factor} \\
     --cutmix-p            ${params.cutmix_p} \\
     --num-data-workers    ${params.num_data_workers} \\
     --torch-threads       ${params.torch_threads} \\
     --len-alpha           ${params.len_alpha} \\
     --res-beta            ${params.res_beta} \\
-    ${ params.label_roll        ? '--label-roll'        : '' } \\
     --label-roll-width    ${params.label_roll_width} \\
-    ${ params.run_pipeline      ? '--run-pipeline'      : '' } \\
-    --pipeline-out-dir         "${params.pipeline_out_dir}" \\
+    --pipeline-out-dir         '${params.pipeline_out_dir}' \\
     --pipeline-chunk-size      ${params.pipeline_chunk_size} \\
     --pipeline-chunk-overlap   ${params.pipeline_chunk_overlap} \\
     --pipeline-min-distance    ${params.pipeline_min_distance} \\
@@ -162,29 +153,58 @@ PY
     --pipeline-sample-frac     ${params.pipeline_sample_frac} \\
     --pipeline-gmm-k           ${params.pipeline_gmm_k} \\
     --pipeline-beta            ${params.pipeline_beta} \\
-    --pipeline-gamma           ${params.pipeline_gamma} \\
+    --pipeline-gamma          ${params.pipeline_gamma} \\
     --pipeline-seed            ${params.pipeline_seed} \\
     --pipeline-dp-gap-bp       ${params.pipeline_dp_gap_bp} \\
     --pipeline-presmooth-bins  ${params.pipeline_presmooth_bins} \\
-    --postsel-fdr-method       ${params.postsel_fdr_method} \\
+    --postsel-fdr-method       '${params.postsel_fdr_method}' \\
     --postsel-bootstrap        ${params.postsel_bootstrap} \\
     --postsel-lambda-start     ${params.postsel_lambda_start} \\
     --postsel-lambda-end       ${params.postsel_lambda_end} \\
     --postsel-lambda-step      ${params.postsel_lambda_step} \\
     --postsel-pi0-floor        ${params.postsel_pi0_floor} \\
     --postsel-pi0-ceil         ${params.postsel_pi0_ceil}
+  "
+
+  FLAGS=""
+  [ "${params.use_mad}"     = "true" ] && FLAGS="\$FLAGS --use-mad"
+  [ "${params.label_roll}"  = "true" ] && FLAGS="\$FLAGS --label-roll"
+  [ "${params.run_pipeline}"= "true" ] && FLAGS="\$FLAGS --run-pipeline"
+
+  if [ "\$LAUNCH" = "module" ]; then
+    echo "[RUN] python -m driverformer ..."
+    set -x
+    python -u -m driverformer \$COMMON_ARGS \$FLAGS
+    set +x
+  elif [ -f "${projectDir}/trainDriverFormer.py" ]; then
+    echo "[RUN] python trainDriverFormer.py ..."
+    set -x
+    python -u "${projectDir}/trainDriverFormer.py" \$COMMON_ARGS \$FLAGS
+    set +x
+  else
+    echo "[ERROR] Neither 'driverformer' module nor 'trainDriverFormer.py' found in repo."
+    exit 2
+  fi
 
   echo "[DONE] DriverFormer finished."
   """
 }
 
-// -------------------------
-// Workflow
-// -------------------------
+// ===== Workflow =====
 workflow {
-  checkRequired('cls_file', params.cls_file)
-  checkRequired('feat_file', params.feat_file)
-  checkRequired('mutations_file', params.mutations_file)
+  need('cls_file', params.cls_file)
+  need('feat_file', params.feat_file)
+  need('mutations_file', params.mutations_file)
 
-  DRIVERFORMER_TRAIN()
+  // ✔ 채널은 workflow 스코프에서 만든다
+  ch_cls  = Channel.fromPath(params.cls_file)
+  ch_feat = Channel.fromPath(params.feat_file)
+  ch_muts = Channel.fromPath(params.mutations_file)
+
+  // 프로세스에 채널을 연결
+  DRIVERFORMER_RUN(
+    CLS:  ch_cls,
+    FEAT: ch_feat,
+    MUTS:  ch_muts
+  )
 }
