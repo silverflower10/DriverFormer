@@ -228,12 +228,12 @@ process LOCAL_BREAST {
   set -euo pipefail
   BREAST="${projectDir}/data/breast"
   if compgen -G "${BREAST}/cls_embedding.pkl.part_*" > /dev/null; then
-    cat $(printf "%s\n" ${BREAST}/cls_embedding.pkl.part_* | LC_ALL=C sort) > cls_embedding.pkl
+    for p in ${BREAST}/cls_embedding.pkl.part_*; do cat "$p"; done > cls_embedding.pkl
   else
     ln -s "${BREAST}/cls_embedding.pkl" cls_embedding.pkl
   fi
   if compgen -G "${BREAST}/feature_dict_BRCA.pkl.part_*" > /dev/null; then
-    cat $(printf "%s\n" ${BREAST}/feature_dict_BRCA.pkl.part_* | LC_ALL=C sort) > feature_dict_BRCA.pkl
+    for p in ${BREAST}/feature_dict_BRCA.pkl.part_*; do cat "$p"; done > feature_dict_BRCA.pkl
   else
     ln -s "${BREAST}/feature_dict_BRCA.pkl" feature_dict_BRCA.pkl
   fi
