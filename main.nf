@@ -255,8 +255,8 @@ process DRIVERFORMER_TRAIN {
   def A = trainArgs()
   """
   set -euo pipefail
-  REPO="${projectDir}"
-  python - <<'PY' >/dev/null 2>&1 || pip install -e "${REPO}" --no-deps || true
+# REPO is not used; use ${projectDir} directly
+  python - <<'PY' >/dev/null 2>&1 || pip install -e "${projectDir}" --no-deps || true
 import importlib; importlib.import_module('driverformer'); print('ok')
 PY
   if command -v driverformer >/dev/null 2>&1; then
@@ -280,8 +280,8 @@ process DRIVERFORMER_PIPE {
   def B = pipeArgs()
   """
   set -euo pipefail
-  REPO="${projectDir}"
-  python - <<'PY' >/dev/null 2>&1 || pip install -e "${REPO}" --no-deps || true
+# REPO is not used; use ${projectDir} directly
+  python - <<'PY' >/dev/null 2>&1 || pip install -e "${projectDir}" --no-deps || true
 import importlib; importlib.import_module('driverformer'); print('ok')
 PY
   if command -v driverformer >/dev/null 2>&1; then
