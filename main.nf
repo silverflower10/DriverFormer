@@ -1,7 +1,12 @@
-// main.nf — DriverFormer DSL2 (parser-safe; no params{} block; robust run)
+// main.nf — DriverFormer DSL2
+//  - parser-safe (no params{} block)
+//  - auto install requirements.txt (filters torch/CUDA)
+//  - robust import: repo root + driverformer/ on PYTHONPATH
+//  - runs `python -m driverformer` or auto-finds trainDriverFormer.py
+
 nextflow.enable.dsl = 2
 
-// ---------- Param defaults (only here, no params{ } block!) ----------
+// ---------- Param defaults (no params{} here!) ----------
 params.cls_file              = params.cls_file              ?: null
 params.feat_file             = params.feat_file             ?: null
 params.mutations_file        = params.mutations_file        ?: null
@@ -81,7 +86,6 @@ process DRIVERFORMER_RUN {
   echo "[INFO] projectDir = ${projectDir}"
   echo "[INFO] workdir    = \$(pwd)"
   echo "[INFO] repo HEAD  = \$(git -C '${projectDir}' rev-parse --short HEAD 2>/dev/null || echo 'unknown')"
-  echo "[INFO] repo tree:"; (cd '${projectDir}' && ls -al | sed 's/^/  /') || true
 
   export MPLBACKEND=Agg
   export TOKENIZERS_PARALLELISM=false
@@ -89,15 +93,31 @@ process DRIVERFORMER_RUN {
   export MKL_NUM_THREADS=${task.cpus}
   export OPENBLAS_NUM_THREADS=${task.cpus}
   export NUMEXPR_NUM_THREADS=${task.cpus}
-  # safe PYTHONPATH (repo root + package dir; nounset-safe)
+  # safe PYTHONPATH: repo root + package dir (nounset-safe)
   export PYTHONPATH="${projectDir}:${projectDir}/driverformer${PYTHONPATH:+:\$PYTHONPATH}"
 
-  # Debug
+  echo "=== repo tree ==="; (cd '${projectDir}' && ls -al | sed 's/^/  /') || true
+
+  # ----- auto-install requirements (filter torch/CUDA stack) -----
+  if [ -f "${projectDir}/requirements.txt" ]; then
+    echo "[SETUP] Installing requirements.txt"
+    python -m pip install --no-python-version-warning --no-cache-dir -U pip wheel setuptools
+    awk 'BEGIN{IGNORECASE=1}
+         !/^(torch|torchvision|torchaudio|pytorch-triton|triton|nvidia-|cuda|cudnn|cudatoolkit)[=>=]?/ {print}' \
+         "${projectDir}/requirements.txt" > .req_filtered.txt
+    python -m pip install --no-cache-dir -r .req_filtered.txt || echo "[WARN] pip install issues; continue"
+  else
+    echo "[SETUP] No requirements.txt — skip"
+  fi
+  # ---------------------------------------------------------------
+
+  # ----- Debug: env + import driverformer -----
   nvidia-smi || true
   which python || true
   python - <<'PYINFO'
 import sys, importlib, traceback, torch
 print("python =", sys.executable)
+print("sys.path head =", sys.path[:3])
 print("torch  =", torch.__version__, "| cuda?", torch.cuda.is_available(), "| #GPU =", torch.cuda.device_count())
 try:
     m = importlib.import_module("driverformer")
@@ -107,6 +127,7 @@ except Exception:
 PYINFO
   echo "================================================="
 
+  # decide launch mode (fast existence check)
   LAUNCH=\$(python - <<'PY'
 import importlib.util
 print("module" if importlib.util.find_spec("driverformer") else "nomodule")
@@ -114,6 +135,7 @@ PY
 )
   echo "[INFO] launch mode = \${LAUNCH}"
 
+  # fallback script lookup (depth<=3)
   SCRIPT_PATH=\$(find '${projectDir}' -maxdepth 3 -type f -name 'trainDriverFormer.py' | head -n1 || true)
   echo "[INFO] script candidate = \${SCRIPT_PATH:-<none>}"
 
