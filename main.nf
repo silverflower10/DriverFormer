@@ -65,7 +65,7 @@ process DRIVERFORMER_RUN {
     // 레포 스테이징(작업 디렉토리로 복사)
     path DF_PKG                // driverformer/  디렉토리
     path TRAIN_PY              // trainDriverFormer.py
-    path REQS optional true    // requirements.txt (있으면)
+    path REQS                  // requirements.txt 또는 더미 파일(항상 전달)
 
   output:
     path "stdout.txt"
@@ -98,16 +98,22 @@ process DRIVERFORMER_RUN {
 
   # ===== 의존성 설치 =====
   python -m pip install --no-python-version-warning --no-cache-dir -U pip wheel setuptools
-  if [ -f "requirements.txt" ]; then
+
+  # REQS가 실제 requirements.txt일 때만 설치
+  REQS_BN="$(basename "!{REQS}")"
+  if [ -f "!{REQS}" ] && [ "$REQS_BN" = "requirements.txt" ]; then
     echo "[SETUP] Installing requirements.txt (filtered: skip torch/CUDA)"
     grep -viE '^(torch|torchvision|torchaudio|pytorch-triton|triton|nvidia-|cuda|cudnn|cudatoolkit)' \
-      "requirements.txt" > .req_filtered.txt || true
+      "!{REQS}" > .req_filtered.txt || true
     [ -s .req_filtered.txt ] && python -m pip install --no-cache-dir -r .req_filtered.txt || echo "[SETUP] nothing to install from requirements.txt"
+  else
+    echo "[SETUP] No requirements.txt staged (REQS='!{REQS}') — skipping"
   fi
+
   # 부족한 핵심 패키지 자동 보충
   MISSING=$(python - <<'PY'
 mods = ["pandas","pyarrow","scikit-learn","tqdm","pyyaml","matplotlib"]
-import importlib, sys
+import importlib
 print(" ".join([m for m in mods if not importlib.util.find_spec(m)]))
 PY
 )
@@ -209,9 +215,13 @@ workflow {
   ch_muts  = Channel.fromPath(params.mutations_file)
 
   // 레포 파일 채널(스테이징)
-  ch_pkg   = Channel.fromPath("${projectDir}/driverformer",           checkIfExists: true)
-  ch_train = Channel.fromPath("${projectDir}/trainDriverFormer.py",   checkIfExists: true)
-  ch_reqs  = Channel.fromPath("${projectDir}/requirements.txt",       checkIfExists: true)
+  ch_pkg    = Channel.fromPath("${projectDir}/driverformer",           checkIfExists: true)
+  ch_train  = Channel.fromPath("${projectDir}/trainDriverFormer.py",   checkIfExists: true)
+
+  // requirements.txt가 없으면 driverformer/__init__.py 를 더미로 전달(항상 존재)
+  ch_reqs_exist = Channel.fromPath("${projectDir}/requirements.txt",   checkIfExists: true)
+  ch_reqs_dummy = Channel.fromPath("${projectDir}/driverformer/__init__.py", checkIfExists: true)
+  ch_reqs = ch_reqs_exist.ifEmpty(ch_reqs_dummy)
 
   DRIVERFORMER_RUN(ch_cls, ch_feat, ch_muts, ch_pkg, ch_train, ch_reqs)
 }
