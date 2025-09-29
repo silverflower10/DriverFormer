@@ -1,4 +1,4 @@
-// main.nf — stage repo files via channels (DSL2), auto-install deps, run from workdir
+// main.nf — stage repo files via channels (DSL2), SSL-safe auto-install deps, run from workdir
 nextflow.enable.dsl = 2
 
 // ---- Param defaults (no params{} block) ----
@@ -7,6 +7,7 @@ params.feat_file       = params.feat_file       ?: null
 params.mutations_file  = params.mutations_file  ?: null
 params.out_dir         = params.out_dir         ?: 'results/run'
 
+// (기타 학습/파이프라인 파라미터는 이전 버전과 동일) ──────
 params.lr              = (params.lr ?: 2e-4)
 params.batch_size      = (params.batch_size ?: 128)
 params.epochs          = (params.epochs ?: 2)
@@ -58,14 +59,13 @@ process DRIVERFORMER_RUN {
   publishDir "${params.out_dir}", mode: 'copy', overwrite: true
 
   input:
-    // 데이터
     path CLS
     path FEAT
     path MUTS
-    // 레포 스테이징(작업 디렉토리로 복사)
-    path DF_PKG                // driverformer/  디렉토리
-    path TRAIN_PY              // trainDriverFormer.py
-    path REQS                  // requirements.txt 또는 더미 파일(항상 전달)
+    path DF_PKG              // driverformer/
+    path TRAIN_PY            // trainDriverFormer.py
+    path REQS                // requirements.txt 또는 더미 파일
+    path WHEELS optional true  // (있다면) wheels/ 디렉토리 or *.whl/ *.tar.gz
 
   output:
     path "stdout.txt"
@@ -77,10 +77,9 @@ process DRIVERFORMER_RUN {
   exec > >(tee stdout.txt) 2> >(tee stderr.txt >&2)
 
   echo "[INFO] PWD = $(pwd)"
-  echo "[INFO] staged root:"; ls -al | sed 's/^/  /' || true
-  echo "[INFO] staged driverformer:"; ls -al driverformer | sed 's/^/  /' || true
+  ls -al | sed 's/^/  /' || true
+  echo "[INFO] driverformer/:"; ls -al driverformer | sed 's/^/  /' || true
 
-  # env
   export MPLBACKEND=Agg
   export TOKENIZERS_PARALLELISM=false
   export OMP_NUM_THREADS=!{task.cpus}
@@ -88,42 +87,51 @@ process DRIVERFORMER_RUN {
   export OPENBLAS_NUM_THREADS=!{task.cpus}
   export NUMEXPR_NUM_THREADS=!{task.cpus}
 
-  # PYTHONPATH: 작업 디렉토리 기준
-  if [ -z "${PYTHONPATH+x}" ]; then
-    export PYTHONPATH="$PWD:$PWD/driverformer"
-  else
-    export PYTHONPATH="$PWD:$PWD/driverformer:${PYTHONPATH}"
-  fi
+  # PYTHONPATH
+  export PYTHONPATH="$PWD:$PWD/driverformer${PYTHONPATH:+:$PYTHONPATH}"
   echo "[INFO] PYTHONPATH head = $(echo "$PYTHONPATH" | tr ':' '\n' | head -n 3)"
 
-  # ===== 의존성 설치 =====
-  python -m pip install --no-python-version-warning --no-cache-dir -U pip wheel setuptools
+  # ===== 설치 옵션(SSL 우회 포함) =====
+  PIP_OPTS="--no-cache-dir --retries 5 --timeout 60 \
+            --index-url https://pypi.org/simple \
+            --trusted-host pypi.org --trusted-host files.pythonhosted.org"
+  python -m pip install -U pip wheel setuptools $PIP_OPTS || true
 
-  # REQS가 실제 requirements.txt일 때만 설치
+  # 1) requirements.txt 있을 때(파일명이 정확히 requirements.txt인 경우)에만 설치
   REQS_BN="$(basename "!{REQS}")"
   if [ -f "!{REQS}" ] && [ "$REQS_BN" = "requirements.txt" ]; then
-    echo "[SETUP] Installing requirements.txt (filtered: skip torch/CUDA)"
+    echo "[SETUP] Installing requirements.txt (filtered)"
     grep -viE '^(torch|torchvision|torchaudio|pytorch-triton|triton|nvidia-|cuda|cudnn|cudatoolkit)' \
       "!{REQS}" > .req_filtered.txt || true
-    [ -s .req_filtered.txt ] && python -m pip install --no-cache-dir -r .req_filtered.txt || echo "[SETUP] nothing to install from requirements.txt"
+    if [ -s .req_filtered.txt ]; then
+      python -m pip install $PIP_OPTS -r .req_filtered.txt || echo "[WARN] pip install from requirements failed"
+    else
+      echo "[SETUP] nothing to install from requirements.txt"
+    fi
   else
-    echo "[SETUP] No requirements.txt staged (REQS='!{REQS}') — skipping"
+    echo "[SETUP] No requirements.txt staged (REQS='!{REQS}')"
   fi
 
-  # 부족한 핵심 패키지 자동 보충
+  # 2) 로컬 wheels 폴더가 있으면(예: wheels/*) 거기서 설치 시도(오프라인 폴백)
+  if ls wheels/* >/dev/null 2>&1 || ls *.whl *.tar.gz >/dev/null 2>&1; then
+    echo "[SETUP] Installing from local wheels (offline fallback)"
+    python -m pip install --no-index --find-links wheels -r wheels/requirements_wheels.txt 2>/dev/null || true
+    python -m pip install --no-index --find-links . *.whl 2>/dev/null || true
+  fi
+
+  # 3) 핵심 패키지 자동 보충(SSL 옵션 포함)
   MISSING=$(python - <<'PY'
 mods = ["pandas","pyarrow","scikit-learn","tqdm","pyyaml","matplotlib"]
-import importlib
+import importlib.util
 print(" ".join([m for m in mods if not importlib.util.find_spec(m)]))
 PY
 )
   if [ -n "$MISSING" ]; then
     echo "[SETUP] Installing missing packages: $MISSING"
-    python -m pip install --no-cache-dir $MISSING || echo "[WARN] optional installs failed; continue"
+    python -m pip install $PIP_OPTS $MISSING || echo "[WARN] missing packages install failed"
   fi
-  # ======================
+  # ======================================
 
-  # 진단
   which python || true
   python - <<'PYINFO'
 import sys, importlib, traceback
@@ -136,7 +144,6 @@ except Exception:
     print("driverformer import: FAIL — traceback:"); traceback.print_exc()
 PYINFO
 
-  # 공통 인자
   COMMON_ARGS="\
     --cls-file            '!{CLS}' \
     --feat-file           '!{FEAT}' \
@@ -152,7 +159,7 @@ PYINFO
     --dim-feedforward     !{params.dim_feedforward} \
     --dropout             !{params.dropout} \
     --max-seq-len         !{params.max_seq_len} \
-    --segment-lengths     !{params.segment_lengths.join(' ')} \
+    --segment-lengths     '!{params.segment_lengths.join(' ')}' \
     --overlap-factor      !{params.overlap_factor} \
     --huber-factor        !{params.huber_factor} \
     --cutmix-p            !{params.cutmix_p} \
@@ -185,7 +192,6 @@ PYINFO
   [ "!{params.label_roll}"   = "true" ] && FLAGS="${FLAGS} --label-roll"
   [ "!{params.run_pipeline}" = "true" ] && FLAGS="${FLAGS} --run-pipeline"
 
-  # 모듈 우선, 스크립트 폴백
   if python - <<<'import importlib.util; import sys; print(1 if importlib.util.find_spec("driverformer") else 0)'; then
     echo "[RUN] python -m driverformer ..."
     set -x; python -u -m driverformer ${COMMON_ARGS} ${FLAGS}; set +x
@@ -209,19 +215,20 @@ workflow {
   if( !params.feat_file )      error "Missing required param: --feat_file"
   if( !params.mutations_file ) error "Missing required param: --mutations_file"
 
-  // 데이터 채널
   ch_cls   = Channel.fromPath(params.cls_file)
   ch_feat  = Channel.fromPath(params.feat_file)
   ch_muts  = Channel.fromPath(params.mutations_file)
 
-  // 레포 파일 채널(스테이징)
   ch_pkg    = Channel.fromPath("${projectDir}/driverformer",           checkIfExists: true)
   ch_train  = Channel.fromPath("${projectDir}/trainDriverFormer.py",   checkIfExists: true)
 
-  // requirements.txt가 없으면 driverformer/__init__.py 를 더미로 전달(항상 존재)
+  // requirements.txt(있으면) 또는 더미 파일(항상 존재) 준비
   ch_reqs_exist = Channel.fromPath("${projectDir}/requirements.txt",   checkIfExists: true)
   ch_reqs_dummy = Channel.fromPath("${projectDir}/driverformer/__init__.py", checkIfExists: true)
   ch_reqs = ch_reqs_exist.ifEmpty(ch_reqs_dummy)
 
-  DRIVERFORMER_RUN(ch_cls, ch_feat, ch_muts, ch_pkg, ch_train, ch_reqs)
+  // (옵션) wheels/ 폴더가 있으면 함께 스테이징 — 없다면 비워진 채널
+  ch_wheels = Channel.fromPath("${projectDir}/wheels/**", checkIfExists: true)
+
+  DRIVERFORMER_RUN(ch_cls, ch_feat, ch_muts, ch_pkg, ch_train, ch_reqs, ch_wheels)
 }
