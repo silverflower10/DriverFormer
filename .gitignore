@@ -22,3 +22,4 @@ release_assets_*/
 main.nf.bak_*
 nextflow.config.bak_*
 release_assets_*/
+# keep offline wheels
