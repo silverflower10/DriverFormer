@@ -1,7 +1,7 @@
-// main.nf — DriverFormer DSL2 (parser-safe, auto-install, robust import/run)
+// main.nf — DriverFormer DSL2 (parser-safe via `shell:` + ''' + !{..})
 nextflow.enable.dsl = 2
 
-// ---- Param defaults (no params{ } block!) ----
+// ---- Param defaults (no params{ } block) ----
 params.cls_file               = params.cls_file               ?: null
 params.feat_file              = params.feat_file              ?: null
 params.mutations_file         = params.mutations_file         ?: null
@@ -59,6 +59,7 @@ process DRIVERFORMER_RUN {
   cpus 8
   memory '32 GB'
   time '72h'
+
   publishDir "${params.out_dir}", mode: 'copy', overwrite: true
 
   input:
@@ -70,43 +71,50 @@ process DRIVERFORMER_RUN {
     path "stdout.txt"
     path "stderr.txt"
 
-  script:
-  """
+  // <<< 핵심: shell: + 트리플-싱글쿼트 >>> 
+  shell:
+  '''
   set -euo pipefail
   exec > >(tee stdout.txt) 2> >(tee stderr.txt >&2)
 
-  echo "[INFO] projectDir = ${projectDir}"
+  echo "[INFO] projectDir = !{projectDir}"
   echo "[INFO] workdir    = $(pwd)"
-  git -C "${projectDir}" rev-parse --short HEAD 2>/dev/null | xargs -I{} echo "[INFO] repo HEAD  = {}" || true
+  HEAD=$(git -C "!{projectDir}" rev-parse --short HEAD 2>/dev/null || true)
+  [ -n "$HEAD" ] && echo "[INFO] repo HEAD  = $HEAD" || echo "[INFO] repo HEAD  = unknown"
 
   export MPLBACKEND=Agg
   export TOKENIZERS_PARALLELISM=false
-  export OMP_NUM_THREADS=${task.cpus}
-  export MKL_NUM_THREADS=${task.cpus}
-  export OPENBLAS_NUM_THREADS=${task.cpus}
-  export NUMEXPR_NUM_THREADS=${task.cpus}
-  # safe PYTHONPATH
+  export OMP_NUM_THREADS=!{task.cpus}
+  export MKL_NUM_THREADS=!{task.cpus}
+  export OPENBLAS_NUM_THREADS=!{task.cpus}
+  export NUMEXPR_NUM_THREADS=!{task.cpus}
+
+  # PYTHONPATH: repo root + package dir
   if [ -z "${PYTHONPATH+x}" ]; then
-    export PYTHONPATH="${projectDir}:${projectDir}/driverformer"
+    export PYTHONPATH="!{projectDir}:!{projectDir}/driverformer"
   else
-    export PYTHONPATH="${projectDir}:${projectDir}/driverformer:${PYTHONPATH}"
+    export PYTHONPATH="!{projectDir}:!{projectDir}/driverformer:${PYTHONPATH}"
   fi
 
   echo "=== repo tree ==="
-  (cd "${projectDir}" && ls -al | sed 's/^/  /') || true
+  (cd "!{projectDir}" && ls -al | sed 's/^/  /') || true
 
-  # auto-install requirements (filter torch/CUDA)
-  if [ -f "${projectDir}/requirements.txt" ]; then
-    echo "[SETUP] Installing requirements.txt (filtered)"
+  # requirements install (filter torch/CUDA stack to avoid conflicts)
+  if [ -f "!{projectDir}/requirements.txt" ]; then
+    echo "[SETUP] Installing requirements.txt"
     python -m pip install --no-python-version-warning --no-cache-dir -U pip wheel setuptools
     grep -viE '^(torch|torchvision|torchaudio|pytorch-triton|triton|nvidia-|cuda|cudnn|cudatoolkit)' \
-      "${projectDir}/requirements.txt" > .req_filtered.txt || true
-    [ -s .req_filtered.txt ] && python -m pip install --no-cache-dir -r .req_filtered.txt || echo "[SETUP] nothing to install"
+      "!{projectDir}/requirements.txt" > .req_filtered.txt || true
+    if [ -s .req_filtered.txt ]; then
+      python -m pip install --no-cache-dir -r .req_filtered.txt || echo "[WARN] pip install issues; continue"
+    else
+      echo "[SETUP] nothing to install"
+    fi
   else
     echo "[SETUP] No requirements.txt — skip"
   fi
 
-  # debug: env + import
+  # Debug: env + import
   nvidia-smi || true
   which python || true
   python - <<'PYINFO'
@@ -115,14 +123,14 @@ print("python =", sys.executable)
 print("sys.path head =", sys.path[:3])
 print("torch  =", torch.__version__, "| cuda?", torch.cuda.is_available(), "| #GPU =", torch.cuda.device_count())
 try:
-  m = importlib.import_module("driverformer")
-  print("driverformer import: OK; version:", getattr(m, "__version__", "NA"))
+    m = importlib.import_module("driverformer")
+    print("driverformer import: OK; version:", getattr(m, "__version__", "NA"))
 except Exception:
-  print("driverformer import: FAIL — traceback:"); traceback.print_exc()
+    print("driverformer import: FAIL — traceback:"); traceback.print_exc()
 PYINFO
   echo "================================================="
 
-  # choose launcher
+  # Decide launcher (module vs script)
   LAUNCH=$(python - <<'PY'
 import importlib.util
 print("module" if importlib.util.find_spec("driverformer") else "nomodule")
@@ -130,58 +138,58 @@ PY
 )
   echo "[INFO] launch mode = ${LAUNCH}"
 
-  # fallback script lookup
-  SCRIPT_PATH=$(find "${projectDir}" -maxdepth 3 -type f -name 'trainDriverFormer.py' | head -n1 || true)
+  # Fallback script lookup
+  SCRIPT_PATH=$(find "!{projectDir}" -maxdepth 3 -type f -name 'trainDriverFormer.py' | head -n1 || true)
   echo "[INFO] script candidate = ${SCRIPT_PATH:-<none>}"
 
   COMMON_ARGS="\
-    --cls-file            '${CLS}' \
-    --feat-file           '${FEAT}' \
-    --mutations-file      '${MUTS}' \
-    --out-dir             '${params.out_dir}' \
-    --lr                  ${params.lr} \
-    --batch-size          ${params.batch_size} \
-    --epochs              ${params.epochs} \
-    --seed                ${params.seed} \
-    --d-model             ${params.d_model} \
-    --nhead               ${params.nhead} \
-    --num-layers          ${params.num_layers} \
-    --dim-feedforward     ${params.dim_feedforward} \
-    --dropout             ${params.dropout} \
-    --max-seq-len         ${params.max_seq_len} \
-    --segment-lengths     ${params.segment_lengths.join(' ')} \
-    --overlap-factor      ${params.overlap_factor} \
-    --huber-factor        ${params.huber_factor} \
-    --cutmix-p            ${params.cutmix_p} \
-    --num-data-workers    ${params.num_data_workers} \
-    --torch-threads       ${params.torch_threads} \
-    --len-alpha           ${params.len_alpha} \
-    --res-beta            ${params.res_beta} \
-    --label-roll-width    ${params.label_roll_width} \
-    --pipeline-out-dir         '${params.pipeline_out_dir}' \
-    --pipeline-chunk-size      ${params.pipeline_chunk_size} \
-    --pipeline-chunk-overlap   ${params.pipeline_chunk_overlap} \
-    --pipeline-min-distance    ${params.pipeline_min_distance} \
-    --pipeline-max-distance    ${params.pipeline_max_distance} \
-    --pipeline-sample-frac     ${params.pipeline_sample_frac} \
-    --pipeline-gmm-k           ${params.pipeline_gmm_k} \
-    --pipeline-beta            ${params.pipeline_beta} \
-    --pipeline-gamma           ${params.pipeline_gamma} \
-    --pipeline-seed            ${params.pipeline_seed} \
-    --pipeline-dp-gap-bp       ${params.pipeline_dp_gap_bp} \
-    --pipeline-presmooth-bins  ${params.pipeline_presmooth_bins} \
-    --postsel-fdr-method       '${params.postsel_fdr_method}' \
-    --postsel-bootstrap        ${params.postsel_bootstrap} \
-    --postsel-lambda-start     ${params.postsel_lambda_start} \
-    --postsel-lambda-end       ${params.postsel_lambda_end} \
-    --postsel-lambda-step      ${params.postsel_lambda_step} \
-    --postsel-pi0-floor        ${params.postsel_pi0_floor} \
-    --postsel-pi0-ceil         ${params.postsel_pi0_ceil}'"
+    --cls-file            '!{CLS}' \
+    --feat-file           '!{FEAT}' \
+    --mutations-file      '!{MUTS}' \
+    --out-dir             '!{params.out_dir}' \
+    --lr                  !{params.lr} \
+    --batch-size          !{params.batch_size} \
+    --epochs              !{params.epochs} \
+    --seed                !{params.seed} \
+    --d-model             !{params.d_model} \
+    --nhead               !{params.nhead} \
+    --num-layers          !{params.num_layers} \
+    --dim-feedforward     !{params.dim_feedforward} \
+    --dropout             !{params.dropout} \
+    --max-seq-len         !{params.max_seq_len} \
+    --segment-lengths     !{params.segment_lengths.join(' ')} \
+    --overlap-factor      !{params.overlap_factor} \
+    --huber-factor        !{params.huber_factor} \
+    --cutmix-p            !{params.cutmix_p} \
+    --num-data-workers    !{params.num_data_workers} \
+    --torch-threads       !{params.torch_threads} \
+    --len-alpha           !{params.len_alpha} \
+    --res-beta            !{params.res_beta} \
+    --label-roll-width    !{params.label_roll_width} \
+    --pipeline-out-dir         '!{params.pipeline_out_dir}' \
+    --pipeline-chunk-size      !{params.pipeline_chunk_size} \
+    --pipeline-chunk-overlap   !{params.pipeline_chunk_overlap} \
+    --pipeline-min-distance    !{params.pipeline_min_distance} \
+    --pipeline-max-distance    !{params.pipeline_max_distance} \
+    --pipeline-sample-frac     !{params.pipeline_sample_frac} \
+    --pipeline-gmm-k           !{params.pipeline_gmm_k} \
+    --pipeline-beta            !{params.pipeline_beta} \
+    --pipeline-gamma          !{params.pipeline_gamma} \
+    --pipeline-seed            !{params.pipeline_seed} \
+    --pipeline-dp-gap-bp       !{params.pipeline_dp_gap_bp} \
+    --pipeline-presmooth-bins  !{params.pipeline_presmooth_bins} \
+    --postsel-fdr-method       '!{params.postsel_fdr_method}' \
+    --postsel-bootstrap        !{params.postsel_bootstrap} \
+    --postsel-lambda-start     !{params.postsel_lambda_start} \
+    --postsel-lambda-end       !{params.postsel_lambda_end} \
+    --postsel-lambda-step      !{params.postsel_lambda_step} \
+    --postsel-pi0-floor        !{params.postsel_pi0_floor} \
+    --postsel-pi0-ceil         !{params.postsel_pi0_ceil}'"
 
   FLAGS=""
-  [ "${params.use_mad}"  = "true" ] && FLAGS="${FLAGS} --use-mad"
-  [ "${params.label_roll}" = "true" ] && FLAGS="${FLAGS} --label-roll"
-  [ "${params.run_pipeline}" = "true" ] && FLAGS="${FLAGS} --run-pipeline"
+  [ "!{params.use_mad}"      = "true" ] && FLAGS="${FLAGS} --use-mad"
+  [ "!{params.label_roll}"   = "true" ] && FLAGS="${FLAGS} --label-roll"
+  [ "!{params.run_pipeline}" = "true" ] && FLAGS="${FLAGS} --run-pipeline"
 
   if [ "${LAUNCH}" = "module" ]; then
     echo "[RUN] python -m driverformer ..."
@@ -195,7 +203,7 @@ PY
   fi
 
   echo "[DONE] DriverFormer finished."
-  """
+  '''
 }
 
 // ---- Workflow ----

@@ -1,3 +1,14 @@
+work/
+results/
+.nextflow*
+.cache/
+*.log
+__pycache__/
+*.pyc
+.DS_Store
+.env
+
+# local backups & release assets
+main.nf.bak_*
+nextflow.config.bak_*
 release_assets_*/
-*.tar.gz
-.git.bad*/
