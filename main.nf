@@ -7,7 +7,7 @@ params.pipeline_only       = params.pipeline_only       ?: false
 params.mutations_file      = params.mutations_file      ?: null
 params.all_pred            = params.all_pred            ?: null
 
-// (NEW) 외부에서 CLS/FEAT 경로로 받는 옵션 (s3://, gs://, file://, 로컬 경로 등)
+// 외부 CLS/FEAT 경로 사용(둘 다 주어야 사용)
 params.cls_file            = params.cls_file            ?: null
 params.feat_file           = params.feat_file           ?: null
 
@@ -148,13 +148,12 @@ if (params.pipeline_only && !params.all_pred)
 ALL_PRED = params.pipeline_only ? Channel.fromPath(params.all_pred, checkIfExists: true)
                                 : Channel.empty()
 
-// (NEW) CLS/FEAT 입력 경로 처리
+// CLS/FEAT: 외부 경로 둘 다 제공 → 외부, 아니면 (릴리즈|로컬)에서 준비
 if ( (params.cls_file && !params.feat_file) || (!params.cls_file && params.feat_file) )
   exit 1, "ERROR: --cls_file and --feat_file must be provided together"
 
 Channel CLS_CH
 Channel FEAT_CH
-
 if (params.cls_file && params.feat_file) {
   CLS_CH  = Channel.fromPath(params.cls_file,  checkIfExists: true)
   FEAT_CH = Channel.fromPath(params.feat_file, checkIfExists: true)
@@ -170,7 +169,7 @@ if (params.cls_file && params.feat_file) {
 process DOWNLOAD_BREAST_RELEASE {
   tag "download:${params.release_tag ?: 'NA'}"
   cpus 1
-  memory '2 GB'
+  memory '3 GB'
   time '3h'
 
   output:
@@ -184,69 +183,37 @@ process DOWNLOAD_BREAST_RELEASE {
   def tok = params.gh_token ? params.gh_token : ''
   """
   set -euo pipefail
+  AUTH=${tok ? 1 : 0}
+  if [ "$AUTH" -eq 1 ]; then HDR="-H 'Authorization: Bearer ${tok}'"; else HDR=""; fi
+
+  if echo '${params.asset_name}' | grep -qE '\\.tar\\.gz$'; then
+    URL="https://github.com/${params.gh_repo}/releases/download/${params.release_tag}/${params.asset_name}"
+    echo "[DL] $URL"
+    if [ "$AUTH" -eq 1 ]; then eval "curl -fL $HDR -o '${params.asset_name}' '$URL'"; else curl -fL -o '${params.asset_name}' "$URL"; fi
+    tar -xzf '${params.asset_name}'
+    test -f cls_embedding.pkl && test -f feature_dict_BRCA.pkl
+    exit 0
+  fi
+
+  API="https://api.github.com/repos/${params.gh_repo}/releases/tags/${params.release_tag}"
+  echo "[API] $API"
+  if [ "$AUTH" -eq 1 ]; then eval "curl -s $HDR '$API' > rel.json"; else curl -s '$API' > rel.json; fi
   python - <<'PY'
-  import os, sys, json, ssl, tarfile
-  from urllib.request import urlopen, Request
-
-  GH_REPO = "${params.gh_repo}"
-  TAG     = "${params.release_tag}"
-  ASSET   = "${params.asset_name}"  # "parts" or "breast_data.tar.gz"
-  TOKEN   = "${tok}" or None
-
-  def http_get(url, headers=None):
-      req = Request(url)
-      if headers:
-          for k,v in headers.items(): req.add_header(k,v)
-      ctx = ssl.create_default_context()
-      with urlopen(req, context=ctx) as r:
-          return r.read()
-
-  def download_to(url, outfile, headers=None, chunk=1024*1024):
-      req = Request(url)
-      if headers:
-          for k,v in headers.items(): req.add_header(k,v)
-      ctx = ssl.create_default_context()
-      with urlopen(req, context=ctx) as r, open(outfile, 'wb') as w:
-          while True:
-              buf = r.read(chunk)
-              if not buf: break
-              w.write(buf)
-
-  hdr = {'Authorization': f'Bearer {TOKEN}'} if TOKEN else {}
-
-  if ASSET == "parts":
-      api = f"https://api.github.com/repos/{GH_REPO}/releases/tags/{TAG}"
-      rel = json.loads(http_get(api, headers=hdr).decode())
-      urls = [a.get('browser_download_url') for a in rel.get('assets', [])]
-      cls  = sorted([u for u in urls if u and 'cls_embedding.pkl.part_' in u])
-      feat = sorted([u for u in urls if u and 'feature_dict_BRCA.pkl.part_' in u])
-      if not cls or not feat:
-          print("[ERR] release missing part assets", file=sys.stderr); sys.exit(2)
-
-      with open("cls_embedding.pkl","wb") as out:
-          for u in cls:
-              fn = u.rsplit("/",1)[-1]
-              print("[DL]", fn)
-              download_to(u, fn, headers=hdr)
-              with open(fn,"rb") as p: out.write(p.read())
-
-      with open("feature_dict_BRCA.pkl","wb") as out:
-          for u in feat:
-              fn = u.rsplit("/",1)[-1]
-              print("[DL]", fn)
-              download_to(u, fn, headers=hdr)
-              with open(fn,"rb") as p: out.write(p.read())
-
-  else:
-      url = f"https://github.com/${GH_REPO}/releases/download/${TAG}/${ASSET}"
-      print("[DL]", ASSET)
-      download_to(url, ASSET, headers=hdr)
-      with tarfile.open(ASSET, "r:gz") as tf:
-          tf.extractall(".")
-      if not (os.path.exists("cls_embedding.pkl") and os.path.exists("feature_dict_BRCA.pkl")):
-          print("[ERR] archive does not contain required PKL files", file=sys.stderr)
-          sys.exit(2)
-  PY
+import json, subprocess
+rel=json.load(open('rel.json'))
+urls=[a.get('browser_download_url') for a in rel.get('assets',[])]
+cls=sorted([u for u in urls if u and 'cls_embedding.pkl.part_' in u])
+feat=sorted([u for u in urls if u and 'feature_dict_BRCA.pkl.part_' in u])
+assert cls and feat, "missing part assets"
+for group in (cls, feat):
+    for u in group:
+        fn=u.rsplit('/',1)[-1]
+        print("[DL]", fn)
+        subprocess.check_call(['bash','-lc', f'curl --http1.1 -fL -o "{fn}" "{u}"'])
+PY
+  cat $(printf "%s\n" cls_embedding.pkl.part_* | LC_ALL=C sort) > cls_embedding.pkl
+  cat $(printf "%s\n" feature_dict_BRCA.pkl.part_* | LC_ALL=C sort) > feature_dict_BRCA.pkl
+  ls -lh cls_embedding.pkl feature_dict_BRCA.pkl
   """
 }
 
@@ -261,16 +228,16 @@ process LOCAL_BREAST {
   script:
   """
   set -euo pipefail
-  BREAST="\${projectDir}/data/breast"
-  if compgen -G "\${BREAST}/cls_embedding.pkl.part_*" > /dev/null; then
-    cat \$(printf "%s\\n" \${BREAST}/cls_embedding.pkl.part_* | LC_ALL=C sort) > cls_embedding.pkl
+  BREAST="${projectDir}/data/breast"
+  if compgen -G "${BREAST}/cls_embedding.pkl.part_*" > /dev/null; then
+    cat $(printf "%s\n" ${BREAST}/cls_embedding.pkl.part_* | LC_ALL=C sort) > cls_embedding.pkl
   else
-    ln -s "\${BREAST}/cls_embedding.pkl" cls_embedding.pkl
+    ln -s "${BREAST}/cls_embedding.pkl" cls_embedding.pkl
   fi
-  if compgen -G "\${BREAST}/feature_dict_BRCA.pkl.part_*" > /dev/null; then
-    cat \$(printf "%s\\n" \${BREAST}/feature_dict_BRCA.pkl.part_* | LC_ALL=C sort) > feature_dict_BRCA.pkl
+  if compgen -G "${BREAST}/feature_dict_BRCA.pkl.part_*" > /dev/null; then
+    cat $(printf "%s\n" ${BREAST}/feature_dict_BRCA.pkl.part_* | LC_ALL=C sort) > feature_dict_BRCA.pkl
   else
-    ln -s "\${BREAST}/feature_dict_BRCA.pkl" feature_dict_BRCA.pkl
+    ln -s "${BREAST}/feature_dict_BRCA.pkl" feature_dict_BRCA.pkl
   fi
   """
 }
@@ -287,14 +254,14 @@ process DRIVERFORMER_TRAIN {
   def A = trainArgs()
   """
   set -euo pipefail
-  REPO="\${projectDir}"
-  python - <<'PY' >/dev/null 2>&1 || pip install -e "\${REPO}" --no-deps || true
+  REPO="${projectDir}"
+  python - <<'PY' >/dev/null 2>&1 || pip install -e "${REPO}" --no-deps || true
 import importlib; importlib.import_module('driverformer'); print('ok')
 PY
   if command -v driverformer >/dev/null 2>&1; then
-    driverformer --cls-file "\${cls_pkl}" --feat-file "\${feat_pkl}" --mutations-file "\${mut_file}" ${A}
+    driverformer --cls-file "${cls_pkl}" --feat-file "${feat_pkl}" --mutations-file "${mut_file}" ${A}
   else
-    python -m driverformer.cli --cls-file "\${cls_pkl}" --feat-file "\${feat_pkl}" --mutations-file "\${mut_file}" ${A}
+    python -m driverformer.cli --cls-file "${cls_pkl}" --feat-file "${feat_pkl}" --mutations-file "${mut_file}" ${A}
   fi
   """
 }
@@ -309,14 +276,14 @@ process DRIVERFORMER_PIPE {
   def B = pipeArgs()
   """
   set -euo pipefail
-  REPO="\${projectDir}"
-  python - <<'PY' >/dev/null 2>&1 || pip install -e "\${REPO}" --no-deps || true
+  REPO="${projectDir}"
+  python - <<'PY' >/dev/null 2>&1 || pip install -e "${REPO}" --no-deps || true
 import importlib; importlib.import_module('driverformer'); print('ok')
 PY
   if command -v driverformer >/dev/null 2>&1; then
-    driverformer --all-pred "\${all_pred}" ${B}
+    driverformer --all-pred "${all_pred}" ${B}
   else
-    python -m driverformer.cli --all-pred "\${all_pred}" ${B}
+    python -m driverformer.cli --all-pred "${all_pred}" ${B}
   fi
   """
 }
