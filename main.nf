@@ -58,13 +58,13 @@ params.postsel_pi0_ceil     = params.postsel_pi0_ceil     ?: 1.0
 
 // Release download options
 params.use_release  = params.use_release ?: false
-params.gh_repo      = params.gh_repo     ?: null
-params.release_tag  = params.release_tag ?: null
-params.asset_name   = params.asset_name  ?: 'parts'   // 'parts' or tar.gz name
-params.gh_token     = params.gh_token    ?: null
+params.gh_repo      = params.gh_repo     ?: null         // e.g. silverflower10/DriverFormer
+params.release_tag  = params.release_tag ?: null         // e.g. breast-data-v1
+params.asset_name   = params.asset_name  ?: 'parts'      // 'parts' or tar.gz filename
+params.gh_token     = params.gh_token    ?: null         // private release only
 
 // ==============================
-// Helpers (build CLI args)
+// Helpers
 // ==============================
 def asList(v) { (v instanceof List) ? v : v.toString().trim().split(/\s+/)*.toInteger() }
 
@@ -148,53 +148,83 @@ ALL_PRED = params.pipeline_only ? Channel.fromPath(params.all_pred, checkIfExist
 // Processes
 // ==============================
 
-// Download PKLs from GitHub Release (parts or tar.gz)
+// Python-only downloader (works in python:3.11 container)
 process DOWNLOAD_BREAST_RELEASE {
   tag "download:${params.release_tag ?: 'NA'}"
   cpus 1; memory '3 GB'; time '3h'
-  output: path "cls_embedding.pkl", emit: cls
-          path "feature_dict_BRCA.pkl", emit: feat
-  when: params.use_release
+  output:
+    path "cls_embedding.pkl", emit: cls
+    path "feature_dict_BRCA.pkl", emit: feat
+  when:
+    params.use_release
   script:
   if (!params.gh_repo || !params.release_tag) {
     throw new RuntimeException("use_release=true requires --gh_repo and --release_tag")
   }
-  def baseApi = "https://api.github.com/repos/${params.gh_repo}/releases/tags/${params.release_tag}"
-  def asset   = params.asset_name
   """
   set -euo pipefail
-  AUTH=${params.gh_token ? 1 : 0}
-  HDR=""
-  [ "\$AUTH" -eq 1 ] && HDR="-H 'Authorization: Bearer ${params.gh_token}'" || true
-
-  if echo '${asset}' | grep -qE '\\.tar\\.gz\$'; then
-    URL="https://github.com/${params.gh_repo}/releases/download/${params.release_tag}/${asset}"
-    echo "[DL] \$URL"
-    if [ "\$AUTH" -eq 1 ]; then eval "curl -fL \$HDR -o '${asset}' '\$URL'"; else curl -fL -o '${asset}' "\$URL"; fi
-    tar -xzf '${asset}'
-    test -f cls_embedding.pkl && test -f feature_dict_BRCA.pkl
-    exit 0
-  fi
-
-  # parts mode
-  echo "[API] ${baseApi}"
-  if [ "\$AUTH" -eq 1 ]; then eval "curl -s \$HDR '${baseApi}' > rel.json"; else curl -s '${baseApi}' > rel.json; fi
   python - <<'PY'
-import json, subprocess
-rel=json.load(open('rel.json'))
-urls=[a['browser_download_url'] for a in rel.get('assets',[])]
-parts=sorted([u for u in urls if 'cls_embedding.pkl.part_' in u])+\
-      sorted([u for u in urls if 'feature_dict_BRCA.pkl.part_' in u])
-hdr=[]
-# GH_TOKEN presence handled in shell, not needed here
-for u in parts:
-    fn=u.split('/')[-1]
+import os, sys, json, ssl
+from urllib.request import Request, urlopen
+
+GH_REPO   = "${params.gh_repo}"
+TAG       = "${params.release_tag}"
+ASSET     = "${params.asset_name}"
+TOKEN     = ${params.gh_token ? "'" + params.gh_token + "'" : "None"}
+
+def http_get(url, headers=None):
+    req = Request(url)
+    if headers:
+        for k,v in headers.items(): req.add_header(k,v)
+    ctx = ssl.create_default_context()
+    return urlopen(req, context=ctx).read()
+
+def download_to(url, out, headers=None):
+    req = Request(url)
+    if headers:
+        for k,v in headers.items(): req.add_header(k,v)
+    with urlopen(req) as r, open(out,"wb") as w:
+        while True:
+            chunk = r.read(1024*1024)
+            if not chunk: break
+            w.write(chunk)
+
+hdr = {"Accept":"application/vnd.github+json"}
+if TOKEN: hdr["Authorization"] = f"Bearer {TOKEN}"
+
+# case: tar.gz asset
+if ASSET.endswith(".tar.gz"):
+    url = f"https://github.com/{GH_REPO}/releases/download/{TAG}/{ASSET}"
+    download_to(url, ASSET, headers=hdr)
+    os.system(f"tar -xzf {ASSET}")
+    assert os.path.exists("cls_embedding.pkl") and os.path.exists("feature_dict_BRCA.pkl")
+    sys.exit(0)
+
+# case: parts - fetch asset list
+api = f"https://api.github.com/repos/{GH_REPO}/releases/tags/{TAG}"
+rel = json.loads(http_get(api, headers=hdr).decode())
+assets = rel.get("assets",[])
+urls = [a["browser_download_url"] for a in assets]
+cls = sorted([u for u in urls if "cls_embedding.pkl.part_" in u])
+feat= sorted([u for u in urls if "feature_dict_BRCA.pkl.part_" in u])
+if not cls or not feat:
+    print("[ERR] release missing part assets", file=sys.stderr); sys.exit(2)
+
+# download all parts
+for u in cls + feat:
+    fn = u.split("/")[-1]
     print("[DL]", fn)
-    subprocess.check_call(['bash','-lc', 'curl --http1.1 -fL -o '+fn+' '+u])
+    download_to(u, fn, headers=hdr)
+
+# assemble
+with open("cls_embedding.pkl","wb") as w:
+    for u in cls:
+        w.write(open(u.split("/")[-1],"rb").read())
+with open("feature_dict_BRCA.pkl","wb") as w:
+    for u in feat:
+        w.write(open(u.split("/")[-1],"rb").read())
+print("[OK] assembled:", os.path.getsize("cls_embedding.pkl"), os.path.getsize("feature_dict_BRCA.pkl"))
 PY
-  cat \$(printf "%s\\n" cls_embedding.pkl.part_* | LC_ALL=C sort) > cls_embedding.pkl
-  cat \$(printf "%s\\n" feature_dict_BRCA.pkl.part_* | LC_ALL=C sort) > feature_dict_BRCA.pkl
-  ls -lh cls_embedding.pkl feature_dict_BRCA.pkl
   """
 }
 
@@ -202,9 +232,11 @@ PY
 process LOCAL_BREAST {
   tag "local"
   cpus 1; memory '1 GB'; time '1h'
-  output: path "cls_embedding.pkl", emit: cls
-          path "feature_dict_BRCA.pkl", emit: feat
-  when: !params.use_release
+  output:
+    path "cls_embedding.pkl", emit: cls
+    path "feature_dict_BRCA.pkl", emit: feat
+  when:
+    !params.use_release
   script:
   """
   set -euo pipefail
@@ -222,7 +254,7 @@ process LOCAL_BREAST {
   """
 }
 
-// Train + (optionally) run pipeline
+// Train (+optional pipeline)
 process DRIVERFORMER_TRAIN {
   tag "train"
   cpus 8; memory '32 GB'; time '48h'
@@ -236,14 +268,9 @@ process DRIVERFORMER_TRAIN {
   """
   set -euo pipefail
   REPO="\${projectDir}"
-  if python - <<'PY' >/dev/null 2>&1; then
+  python - <<'PY' >/dev/null 2>&1 || pip install -e "\${REPO}" --no-deps || true
 import importlib; importlib.import_module('driverformer'); print('ok')
 PY
-    then echo "[INFO] driverformer installed"
-  else
-    pip install -e "\${REPO}" --no-deps || true
-  fi
-
   if command -v driverformer >/dev/null 2>&1; then
     driverformer --cls-file "\${cls_pkl}" --feat-file "\${feat_pkl}" --mutations-file "\${mut_file}" ${A}
   else
@@ -263,10 +290,9 @@ process DRIVERFORMER_PIPE {
   """
   set -euo pipefail
   REPO="\${projectDir}"
-  if ! python - <<'PY' >/dev/null 2>&1; then
+  python - <<'PY' >/dev/null 2>&1 || pip install -e "\${REPO}" --no-deps || true
 import importlib; importlib.import_module('driverformer'); print('ok')
 PY
-  then pip install -e "\${REPO}" --no-deps || true; fi
   if command -v driverformer >/dev/null 2>&1; then
     driverformer --all-pred "\${all_pred}" ${B}
   else
@@ -279,17 +305,10 @@ PY
 // Workflow
 // ==============================
 workflow {
-
   if (params.pipeline_only) {
     DRIVERFORMER_PIPE( ALL_PRED )
     return
   }
-
-  // prepare CLS/FEAT channels (either release or local)
-  def out_chs = params.use_release ? DOWNLOAD_BREAST_RELEASE() : LOCAL_BREAST()
-  def CLS_CH  = out_chs.cls
-  def FEAT_CH = out_chs.feat
-
-  // run training with three inputs (cls, feat, mut)
-  DRIVERFORMER_TRAIN( CLS_CH, FEAT_CH, MUT_FILE )
+  def out = params.use_release ? DOWNLOAD_BREAST_RELEASE() : LOCAL_BREAST()
+  DRIVERFORMER_TRAIN( out.cls, out.feat, MUT_FILE )
 }
