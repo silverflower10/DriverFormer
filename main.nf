@@ -62,9 +62,9 @@ process DRIVERFORMER_RUN {
     path CLS
     path FEAT
     path MUTS
-    // 레포 스테이징: 패키지는 필수, 스크립트는 옵션(없으면 모듈로만 실행)
+    // 레포 스테이징(둘 다 작업 디렉토리로 복사)
     path DF_PKG
-    path TRAIN_PY optional true
+    path TRAIN_PY
 
   output:
     path "stdout.txt"
@@ -186,8 +186,8 @@ workflow {
   ch_feat  = Channel.fromPath(params.feat_file)
   ch_muts  = Channel.fromPath(params.mutations_file)
 
-  // ★ 레포 파일 채널(여기서 만들어야 스테이징됨)
-  ch_pkg   = Channel.fromPath("${projectDir}/driverformer",       checkIfExists: true)
+  // 레포 파일 채널(여기서 만들어야 스테이징됨)
+  ch_pkg   = Channel.fromPath("${projectDir}/driverformer",         checkIfExists: true)
   ch_train = Channel.fromPath("${projectDir}/trainDriverFormer.py", checkIfExists: true)
 
   DRIVERFORMER_RUN(ch_cls, ch_feat, ch_muts, ch_pkg, ch_train)
