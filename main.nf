@@ -1,4 +1,4 @@
-// main.nf — stage repo files via channels (DSL2), then run from workdir
+// main.nf — stage repo files via channels (DSL2), auto-install deps, run from workdir
 nextflow.enable.dsl = 2
 
 // ---- Param defaults (no params{} block) ----
@@ -62,9 +62,10 @@ process DRIVERFORMER_RUN {
     path CLS
     path FEAT
     path MUTS
-    // 레포 스테이징(둘 다 작업 디렉토리로 복사)
-    path DF_PKG
-    path TRAIN_PY
+    // 레포 스테이징(작업 디렉토리로 복사)
+    path DF_PKG                // driverformer/  디렉토리
+    path TRAIN_PY              // trainDriverFormer.py
+    path REQS optional true    // requirements.txt (있으면)
 
   output:
     path "stdout.txt"
@@ -95,7 +96,28 @@ process DRIVERFORMER_RUN {
   fi
   echo "[INFO] PYTHONPATH head = $(echo "$PYTHONPATH" | tr ':' '\n' | head -n 3)"
 
-  # 간단 진단
+  # ===== 의존성 설치 =====
+  python -m pip install --no-python-version-warning --no-cache-dir -U pip wheel setuptools
+  if [ -f "requirements.txt" ]; then
+    echo "[SETUP] Installing requirements.txt (filtered: skip torch/CUDA)"
+    grep -viE '^(torch|torchvision|torchaudio|pytorch-triton|triton|nvidia-|cuda|cudnn|cudatoolkit)' \
+      "requirements.txt" > .req_filtered.txt || true
+    [ -s .req_filtered.txt ] && python -m pip install --no-cache-dir -r .req_filtered.txt || echo "[SETUP] nothing to install from requirements.txt"
+  fi
+  # 부족한 핵심 패키지 자동 보충
+  MISSING=$(python - <<'PY'
+mods = ["pandas","pyarrow","scikit-learn","tqdm","pyyaml","matplotlib"]
+import importlib, sys
+print(" ".join([m for m in mods if not importlib.util.find_spec(m)]))
+PY
+)
+  if [ -n "$MISSING" ]; then
+    echo "[SETUP] Installing missing packages: $MISSING"
+    python -m pip install --no-cache-dir $MISSING || echo "[WARN] optional installs failed; continue"
+  fi
+  # ======================
+
+  # 진단
   which python || true
   python - <<'PYINFO'
 import sys, importlib, traceback
@@ -186,9 +208,10 @@ workflow {
   ch_feat  = Channel.fromPath(params.feat_file)
   ch_muts  = Channel.fromPath(params.mutations_file)
 
-  // 레포 파일 채널(여기서 만들어야 스테이징됨)
-  ch_pkg   = Channel.fromPath("${projectDir}/driverformer",         checkIfExists: true)
-  ch_train = Channel.fromPath("${projectDir}/trainDriverFormer.py", checkIfExists: true)
+  // 레포 파일 채널(스테이징)
+  ch_pkg   = Channel.fromPath("${projectDir}/driverformer",           checkIfExists: true)
+  ch_train = Channel.fromPath("${projectDir}/trainDriverFormer.py",   checkIfExists: true)
+  ch_reqs  = Channel.fromPath("${projectDir}/requirements.txt",       checkIfExists: true)
 
-  DRIVERFORMER_RUN(ch_cls, ch_feat, ch_muts, ch_pkg, ch_train)
+  DRIVERFORMER_RUN(ch_cls, ch_feat, ch_muts, ch_pkg, ch_train, ch_reqs)
 }
