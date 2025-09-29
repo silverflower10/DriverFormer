@@ -7,7 +7,7 @@ params.feat_file       = params.feat_file       ?: null
 params.mutations_file  = params.mutations_file  ?: null
 params.out_dir         = params.out_dir         ?: 'results/run'
 
-// (기타 학습/파이프라인 파라미터는 이전 버전과 동일) ──────
+// (학습/파이프라인 파라미터 — 동일)
 params.lr              = (params.lr ?: 2e-4)
 params.batch_size      = (params.batch_size ?: 128)
 params.epochs          = (params.epochs ?: 2)
@@ -62,10 +62,10 @@ process DRIVERFORMER_RUN {
     path CLS
     path FEAT
     path MUTS
-    path DF_PKG              // driverformer/
-    path TRAIN_PY            // trainDriverFormer.py
-    path REQS                // requirements.txt 또는 더미 파일
-    path WHEELS optional true  // (있다면) wheels/ 디렉토리 or *.whl/ *.tar.gz
+    path DF_PKG           // driverformer/ 디렉토리
+    path TRAIN_PY         // trainDriverFormer.py
+    path REQS             // requirements.txt 또는 더미 파일(항상 전달)
+    path WHEELS_DIR       // wheels 디렉토리 또는 더미(항상 전달)
 
   output:
     path "stdout.txt"
@@ -91,35 +91,42 @@ process DRIVERFORMER_RUN {
   export PYTHONPATH="$PWD:$PWD/driverformer${PYTHONPATH:+:$PYTHONPATH}"
   echo "[INFO] PYTHONPATH head = $(echo "$PYTHONPATH" | tr ':' '\n' | head -n 3)"
 
-  # ===== 설치 옵션(SSL 우회 포함) =====
+  # ---- wheels 디렉토리 표준 이름으로 연결(있을 때만) ----
+  if [ -d "!{WHEELS_DIR}" ]; then
+    [ "!{WHEELS_DIR}" = "wheels" ] || ln -s "!{WHEELS_DIR}" wheels 2>/dev/null || cp -r "!{WHEELS_DIR}" wheels
+    echo "[INFO] wheels/ staged:"; ls -al wheels | sed 's/^/  /' || true
+  else
+    echo "[INFO] no wheels directory staged"
+  fi
+
+  # ===== pip 설치(SSL-safe) =====
   PIP_OPTS="--no-cache-dir --retries 5 --timeout 60 \
             --index-url https://pypi.org/simple \
             --trusted-host pypi.org --trusted-host files.pythonhosted.org"
   python -m pip install -U pip wheel setuptools $PIP_OPTS || true
 
-  # 1) requirements.txt 있을 때(파일명이 정확히 requirements.txt인 경우)에만 설치
-  REQS_BN="$(basename "!{REQS}")"
-  if [ -f "!{REQS}" ] && [ "$REQS_BN" = "requirements.txt" ]; then
+  # requirements.txt 있을 때만 설치
+  if [ -f "!{REQS}" ] && [ "$(basename "!{REQS}")" = "requirements.txt" ]; then
     echo "[SETUP] Installing requirements.txt (filtered)"
     grep -viE '^(torch|torchvision|torchaudio|pytorch-triton|triton|nvidia-|cuda|cudnn|cudatoolkit)' \
       "!{REQS}" > .req_filtered.txt || true
-    if [ -s .req_filtered.txt ]; then
-      python -m pip install $PIP_OPTS -r .req_filtered.txt || echo "[WARN] pip install from requirements failed"
-    else
-      echo "[SETUP] nothing to install from requirements.txt"
-    fi
+    [ -s .req_filtered.txt ] && python -m pip install $PIP_OPTS -r .req_filtered.txt || echo "[SETUP] nothing to install from requirements.txt"
   else
-    echo "[SETUP] No requirements.txt staged (REQS='!{REQS}')"
+    echo "[SETUP] No requirements.txt — skipping"
   fi
 
-  # 2) 로컬 wheels 폴더가 있으면(예: wheels/*) 거기서 설치 시도(오프라인 폴백)
-  if ls wheels/* >/dev/null 2>&1 || ls *.whl *.tar.gz >/dev/null 2>&1; then
+  # 로컬 wheels 폴백
+  if [ -d wheels ]; then
     echo "[SETUP] Installing from local wheels (offline fallback)"
-    python -m pip install --no-index --find-links wheels -r wheels/requirements_wheels.txt 2>/dev/null || true
-    python -m pip install --no-index --find-links . *.whl 2>/dev/null || true
+    # 목록 파일이 있으면 우선 사용
+    if [ -f wheels/requirements_wheels.txt ]; then
+      python -m pip install --no-index --find-links wheels -r wheels/requirements_wheels.txt || true
+    fi
+    # 남은 *.whl 일괄 설치(순서 무관)
+    ls wheels/*.whl >/dev/null 2>&1 && python -m pip install --no-index --find-links wheels wheels/*.whl || true
   fi
 
-  # 3) 핵심 패키지 자동 보충(SSL 옵션 포함)
+  # 핵심 패키지 보충
   MISSING=$(python - <<'PY'
 mods = ["pandas","pyarrow","scikit-learn","tqdm","pyyaml","matplotlib"]
 import importlib.util
@@ -219,16 +226,18 @@ workflow {
   ch_feat  = Channel.fromPath(params.feat_file)
   ch_muts  = Channel.fromPath(params.mutations_file)
 
-  ch_pkg    = Channel.fromPath("${projectDir}/driverformer",           checkIfExists: true)
-  ch_train  = Channel.fromPath("${projectDir}/trainDriverFormer.py",   checkIfExists: true)
+  ch_pkg    = Channel.fromPath("${projectDir}/driverformer",         checkIfExists: true)
+  ch_train  = Channel.fromPath("${projectDir}/trainDriverFormer.py", checkIfExists: true)
 
-  // requirements.txt(있으면) 또는 더미 파일(항상 존재) 준비
-  ch_reqs_exist = Channel.fromPath("${projectDir}/requirements.txt",   checkIfExists: true)
+  // requirements.txt(있으면) 또는 더미 파일(항상 전달)
+  ch_reqs_exist = Channel.fromPath("${projectDir}/requirements.txt",         checkIfExists: true)
   ch_reqs_dummy = Channel.fromPath("${projectDir}/driverformer/__init__.py", checkIfExists: true)
-  ch_reqs = ch_reqs_exist.ifEmpty(ch_reqs_dummy)
+  ch_reqs  = ch_reqs_exist.ifEmpty(ch_reqs_dummy)
 
-  // (옵션) wheels/ 폴더가 있으면 함께 스테이징 — 없다면 비워진 채널
-  ch_wheels = Channel.fromPath("${projectDir}/wheels/**", checkIfExists: true)
+  // wheels 디렉토리(있으면) 또는 더미(항상 전달)
+  ch_wheels_exist = Channel.fromPath("${projectDir}/wheels",                 checkIfExists: true)
+  ch_wheels_dummy = Channel.fromPath("${projectDir}/driverformer/__init__.py", checkIfExists: true)
+  ch_wheels = ch_wheels_exist.ifEmpty(ch_wheels_dummy)
 
   DRIVERFORMER_RUN(ch_cls, ch_feat, ch_muts, ch_pkg, ch_train, ch_reqs, ch_wheels)
 }
