@@ -1,4 +1,4 @@
-// main.nf — DriverFormer DSL2 (parser-safe shell: + ''' + !{..}; robust pkg/script detection)
+// main.nf — DriverFormer DSL2 (robust repo root detection; shell: + ''' + !{..})
 nextflow.enable.dsl = 2
 
 // ---- Param defaults (no params{} block) ----
@@ -75,12 +75,17 @@ process DRIVERFORMER_RUN {
   set -euo pipefail
   exec > >(tee stdout.txt) 2> >(tee stderr.txt >&2)
 
-  echo "[INFO] projectDir = !{projectDir}"
-  echo "[INFO] workdir    = $(pwd)"
-  HEAD=$(git -C "!{projectDir}" rev-parse --short HEAD 2>/dev/null || true)
-  [ -n "$HEAD" ] && echo "[INFO] repo HEAD  = $HEAD" || echo "[INFO] repo HEAD  = unknown"
+  # --- repo root 결정: PWD > baseDir > projectDir (존재 확인) ---
+  CAND1="$(pwd)"
+  CAND2="!{baseDir}"
+  CAND3="!{projectDir}"
+  for D in "$CAND1" "$CAND2" "$CAND3"; do
+    if [ -d "$D" ]; then REPO_DIR="$D"; break; fi
+  done
+  echo "[INFO] REPO_DIR = ${REPO_DIR}"
+  echo "[INFO] PWD      = $(pwd)"
 
-  # Safe env
+  # env
   export MPLBACKEND=Agg
   export TOKENIZERS_PARALLELISM=false
   export OMP_NUM_THREADS=!{task.cpus}
@@ -90,72 +95,61 @@ process DRIVERFORMER_RUN {
 
   # PYTHONPATH: repo root + package dir
   if [ -z "${PYTHONPATH+x}" ]; then
-    export PYTHONPATH="!{projectDir}:!{projectDir}/driverformer"
+    export PYTHONPATH="${REPO_DIR}:${REPO_DIR}/driverformer"
   else
-    export PYTHONPATH="!{projectDir}:!{projectDir}/driverformer:${PYTHONPATH}"
+    export PYTHONPATH="${REPO_DIR}:${REPO_DIR}/driverformer:${PYTHONPATH}"
   fi
-  echo "[INFO] PYTHONPATH head = $(echo "$PYTHONPATH" | tr ':' '\n' | head -n 3)"
+  echo "[INFO] PYTHONPATH head:"
+  echo "$PYTHONPATH" | tr ':' '\n' | head -n 5 | sed 's/^/  /'
 
-  echo "=== repo tree (root) ==="; (cd "!{projectDir}" && ls -al | sed 's/^/  /') || true
-  echo "=== repo tree (driverformer) ==="; (cd "!{projectDir}/driverformer" && ls -al | sed 's/^/  /') || echo "[WARN] driverformer dir missing"
+  # tree
+  echo "=== repo tree (root) ==="; (cd "${REPO_DIR}" && ls -al | sed 's/^/  /') || true
+  echo "=== repo tree (driverformer) ==="; (cd "${REPO_DIR}/driverformer" && ls -al | sed 's/^/  /') || echo "[WARN] driverformer dir missing"
 
-  # Auto-install requirements (skip torch/CUDA)
-  if [ -f "!{projectDir}/requirements.txt" ]; then
+  # requirements install(토치/쿠다는 필터)
+  if [ -f "${REPO_DIR}/requirements.txt" ]; then
     echo "[SETUP] Installing requirements.txt"
     python -m pip install --no-python-version-warning --no-cache-dir -U pip wheel setuptools
     grep -viE '^(torch|torchvision|torchaudio|pytorch-triton|triton|nvidia-|cuda|cudnn|cudatoolkit)' \
-      "!{projectDir}/requirements.txt" > .req_filtered.txt || true
-    if [ -s .req_filtered.txt ]; then
-      python -m pip install --no-cache-dir -r .req_filtered.txt || echo "[WARN] pip install issues; continue"
-    else
-      echo "[SETUP] nothing to install"
-    fi
+      "${REPO_DIR}/requirements.txt" > .req_filtered.txt || true
+    [ -s .req_filtered.txt ] && python -m pip install --no-cache-dir -r .req_filtered.txt || echo "[SETUP] nothing to install"
   else
     echo "[SETUP] No requirements.txt — skip"
   fi
 
-  # Debug: env + import (print full traceback on failure)
-  nvidia-smi || true
+  # debug
   which python || true
   python - <<'PYINFO'
-import os, sys, importlib, traceback, torch
+import sys, importlib, traceback
 print("python =", sys.executable)
-print("sys.path head =", sys.path[:3])
-print("torch  =", torch.__version__, "| cuda?", torch.cuda.is_available(), "| #GPU =", torch.cuda.device_count())
+print("sys.path[:5] =", sys.path[:5])
 try:
-    m = importlib.import_module("driverformer")
+    import driverformer as m
     print("driverformer import: OK; version:", getattr(m, "__version__", "NA"))
 except Exception:
-    print("driverformer import: FAIL — traceback:"); traceback.print_exc()
+    print("driverformer import: FAIL — traceback:")
+    traceback.print_exc()
 PYINFO
-  echo "================================================="
 
-  # Prefer simple directory check for package presence (robust)
-  PKG_DIR="!{projectDir}/driverformer"
-  if [ -d "$PKG_DIR" ] && [ -f "$PKG_DIR/__init__.py" ]; then
-    LAUNCH="pkgdir"
+  # 패키지/스크립트 존재 판정
+  if [ -d "${REPO_DIR}/driverformer" ] && [ -f "${REPO_DIR}/driverformer/__init__.py" ]; then
+    LAUNCH="pkg"
   else
     LAUNCH="nomodule"
   fi
-  echo "[INFO] launch mode by dir check = ${LAUNCH}"
+  echo "[INFO] launch mode = ${LAUNCH}"
 
-  # Fallback script lookup (recursive)
-  SCRIPT_PATH=$(python - <<'PY'
+  # 스크립트 탐색(최대 깊이 3, 흔한 경로 포함)
+  SCRIPT_PATH="$( \
+    python - <<'PY'
 import os, glob
-root = r"!{projectDir}"
+root = r"!{PWD}"
 cands = []
-patterns = [
-  "trainDriverFormer.py",
-  "**/trainDriverFormer.py",
-  "**/*train*DriverFormer*.py",
-  "scripts/*.py",
-  "train/*.py",
-]
-for pat in patterns:
-  cands.extend(glob.glob(os.path.join(root, pat), recursive=True))
+for pat in ("trainDriverFormer.py", "scripts/*.py", "**/trainDriverFormer.py", "train/*.py"):
+    cands += glob.glob(os.path.join(root, pat), recursive=True)
 print(cands[0] if cands else "")
 PY
-)
+  )"
   echo "[INFO] script candidate = ${SCRIPT_PATH:-<none>}"
 
   COMMON_ARGS="\
@@ -207,7 +201,7 @@ PY
   [ "!{params.label_roll}"   = "true" ] && FLAGS="${FLAGS} --label-roll"
   [ "!{params.run_pipeline}" = "true" ] && FLAGS="${FLAGS} --run-pipeline"
 
-  if [ "${LAUNCH}" = "pkgdir" ]; then
+  if [ "${LAUNCH}" = "pkg" ]; then
     echo "[RUN] python -m driverformer ..."
     set -x; python -u -m driverformer ${COMMON_ARGS} ${FLAGS}; set +x
   elif [ -n "${SCRIPT_PATH:-}" ] && [ -f "${SCRIPT_PATH}" ]; then
@@ -215,7 +209,6 @@ PY
     set -x; python -u "${SCRIPT_PATH}" ${COMMON_ARGS} ${FLAGS}; set +x
   else
     echo "[ERROR] Neither 'driverformer' package (dir+__init__) nor 'trainDriverFormer.py' found."
-    echo "[HINT] Check repo tree logs above. Ensure 'driverformer/__init__.py' exists or add trainDriverFormer.py to repo."
     exit 2
   fi
 
