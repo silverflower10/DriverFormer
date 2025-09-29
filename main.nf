@@ -7,7 +7,7 @@ params.pipeline_only       = params.pipeline_only       ?: false
 params.mutations_file      = params.mutations_file      ?: null
 params.all_pred            = params.all_pred            ?: null
 
-// 외부 CLS/FEAT 경로 사용(둘 다 주어야 사용)
+// 외부 CLS/FEAT 경로(둘 다 주면 사용, 아니면 release/local 로직 사용)
 params.cls_file            = params.cls_file            ?: null
 params.feat_file           = params.feat_file           ?: null
 
@@ -64,33 +64,32 @@ params.postsel_pi0_ceil    = params.postsel_pi0_ceil    ?: 1.0
 params.use_release   = params.use_release  ?: false
 params.gh_repo       = params.gh_repo      ?: null     // e.g. silverflower10/DriverFormer
 params.release_tag   = params.release_tag  ?: null     // e.g. breast-data-v1
-params.asset_name    = params.asset_name   ?: 'parts'  // 'parts' or tar.gz filename
+params.asset_name    = params.asset_name   ?: 'parts'  // 'parts' or tar.gz
 params.asset_sha256  = params.asset_sha256 ?: null
 params.gh_token      = params.gh_token     ?: null
 
 // ==============================
 // Helpers
 // ==============================
-def asList(v) { (v instanceof List) ? v : v.toString().trim().split(/\s+/)*.toInteger() }
+def asList(v){ (v instanceof List) ? v : v.toString().trim().split(/\s+/)*.toInteger() }
 
-def trainArgs() {
+def trainArgs(){
   def segs = asList(params.segment_lengths)
-  def a = []
+  def a=[]
   a += "--out-dir ${params.out_dir}"
   a += "--segment-lengths ${segs.join(' ')}"
   a += "--batch-size ${params.batch_size} --epochs ${params.epochs} --lr ${params.lr}"
-  if (params.label_roll) a += "--label-roll"
+  if(params.label_roll) a += "--label-roll"
   a += "--label-roll-width ${params.label_roll_width}"
-  if (params.save_attention) a += "--save-attention"
+  if(params.save_attention) a += "--save-attention"
   a += "--d-model ${params.d_model} --nhead ${params.nhead} --num-layers ${params.num_layers}"
   a += "--dim-feedforward ${params.dim_feedforward} --dropout ${params.dropout} --max-seq-len ${params.max_seq_len}"
   a += "--overlap-factor ${params.overlap_factor} --huber-factor ${params.huber_factor}"
-  if (params.use_mad) a += "--use-mad"
+  if(params.use_mad) a += "--use-mad"
   a += "--cutmix-p ${params.cutmix_p} --num-data-workers ${params.num_data_workers} --torch-threads ${params.torch_threads}"
   a += "--len-alpha ${params.len_alpha} --res-beta ${params.res_beta}"
-  if (params.run_pipeline) a += "--run-pipeline"
-  if (params.pipeline_gmm_auto) a += "--pipeline-gmm-auto"
-  else a += "--pipeline-gmm-k ${params.pipeline_gmm_k}"
+  if(params.run_pipeline) a += "--run-pipeline"
+  if(params.pipeline_gmm_auto) a += "--pipeline-gmm-auto" else a += "--pipeline-gmm-k ${params.pipeline_gmm_k}"
   a += "--pipeline-beta ${params.pipe_beta} --pipeline-gamma ${params.pipe_gamma}"
   a += "--pipeline-dp-gap-bp ${params.pipeline_dp_gap_bp}"
   a += "--pipeline-chunk-size ${params.pipeline_chunk_size}"
@@ -107,15 +106,14 @@ def trainArgs() {
   a += "--postsel-pi0-floor ${params.postsel_pi0_floor}"
   a += "--postsel-pi0-ceil ${params.postsel_pi0_ceil}"
   a += "--pipeline-out-dir ${params.post_dir}"
-  return a.join(' ')
+  a.join(' ')
 }
 
-def pipeArgs() {
-  def b = []
+def pipeArgs(){
+  def b=[]
   b += "--pipeline-only"
   b += "--pipeline-out-dir ${params.post_dir}"
-  if (params.pipeline_gmm_auto) b += "--pipeline-gmm-auto"
-  else b += "--pipeline-gmm-k ${params.pipeline_gmm_k}"
+  if(params.pipeline_gmm_auto) b += "--pipeline-gmm-auto" else b += "--pipeline-gmm-k ${params.pipeline_gmm_k}"
   b += "--pipeline-beta ${params.pipe_beta} --pipeline-gamma ${params.pipe_gamma}"
   b += "--pipeline-dp-gap-bp ${params.pipeline_dp_gap_bp}"
   b += "--pipeline-chunk-size ${params.pipeline_chunk_size}"
@@ -131,95 +129,95 @@ def pipeArgs() {
   b += "--postsel-lambda-step ${params.postsel_lambda_step}"
   b += "--postsel-pi0-floor ${params.postsel_pi0_floor}"
   b += "--postsel-pi0-ceil ${params.postsel_pi0_ceil}"
-  return b.join(' ')
+  b.join(' ')
 }
 
 // ==============================
 // Inputs
 // ==============================
-if (!params.pipeline_only) {
-  if (!params.mutations_file) exit 1, "ERROR: --mutations_file is required (training mode)"
+if(!params.pipeline_only){
+  if(!params.mutations_file) exit 1, "ERROR: --mutations_file is required (training mode)"
 }
-MUT_FILE = params.pipeline_only ? Channel.empty()
-                                : Channel.fromPath(params.mutations_file, checkIfExists: true)
+MUT_FILE = params.pipeline_only ? Channel.empty() : Channel.fromPath(params.mutations_file, checkIfExists: true)
 
-if (params.pipeline_only && !params.all_pred)
+if(params.pipeline_only && !params.all_pred)
   exit 1, "ERROR: --all_pred is required (pipeline-only mode)"
-ALL_PRED = params.pipeline_only ? Channel.fromPath(params.all_pred, checkIfExists: true)
-                                : Channel.empty()
-
-// CLS/FEAT: 외부 경로 둘 다 제공 → 외부, 아니면 (릴리즈|로컬)에서 준비
-if ( (params.cls_file && !params.feat_file) || (!params.cls_file && params.feat_file) )
-  exit 1, "ERROR: --cls_file and --feat_file must be provided together"
-
-Channel CLS_CH
-Channel FEAT_CH
-if (params.cls_file && params.feat_file) {
-  CLS_CH  = Channel.fromPath(params.cls_file,  checkIfExists: true)
-  FEAT_CH = Channel.fromPath(params.feat_file, checkIfExists: true)
-} else {
-  def out = params.use_release ? DOWNLOAD_BREAST_RELEASE() : LOCAL_BREAST()
-  CLS_CH  = out.cls
-  FEAT_CH = out.feat
-}
+ALL_PRED = params.pipeline_only ? Channel.fromPath(params.all_pred, checkIfExists: true) : Channel.empty()
 
 // ==============================
 // Processes
 // ==============================
+
+// 1) GitHub Release downloader — Python only (따옴표/쉘 충돌 제거)
 process DOWNLOAD_BREAST_RELEASE {
   tag "download:${params.release_tag ?: 'NA'}"
   cpus 1
   memory '3 GB'
   time '3h'
-
   output:
   path "cls_embedding.pkl",     emit: cls
   path "feature_dict_BRCA.pkl", emit: feat
-
   when:
   params.use_release
-
   script:
-  def tok = params.gh_token ? params.gh_token : ''
   """
-  set -euo pipefail
-  AUTH=${tok ? 1 : 0}
-  if [ "$AUTH" -eq 1 ]; then HDR="-H 'Authorization: Bearer ${tok}'"; else HDR=""; fi
-
-  if echo '${params.asset_name}' | grep -qE '\\.tar\\.gz$'; then
-    URL="https://github.com/${params.gh_repo}/releases/download/${params.release_tag}/${params.asset_name}"
-    echo "[DL] $URL"
-    if [ "$AUTH" -eq 1 ]; then eval "curl -fL $HDR -o '${params.asset_name}' '$URL'"; else curl -fL -o '${params.asset_name}' "$URL"; fi
-    tar -xzf '${params.asset_name}'
-    test -f cls_embedding.pkl && test -f feature_dict_BRCA.pkl
-    exit 0
-  fi
-
-  API="https://api.github.com/repos/${params.gh_repo}/releases/tags/${params.release_tag}"
-  echo "[API] $API"
-  if [ "$AUTH" -eq 1 ]; then eval "curl -s $HDR '$API' > rel.json"; else curl -s '$API' > rel.json; fi
   python - <<'PY'
-import json, subprocess
-rel=json.load(open('rel.json'))
-urls=[a.get('browser_download_url') for a in rel.get('assets',[])]
-cls=sorted([u for u in urls if u and 'cls_embedding.pkl.part_' in u])
-feat=sorted([u for u in urls if u and 'feature_dict_BRCA.pkl.part_' in u])
-assert cls and feat, "missing part assets"
-for group in (cls, feat):
-    for u in group:
-        fn=u.rsplit('/',1)[-1]
+import os, ssl, json, tarfile, urllib.request, sys, subprocess
+GH_REPO = "${params.gh_repo}"
+TAG     = "${params.release_tag}"
+ASSET   = "${params.asset_name}"
+TOKEN   = "${params.gh_token or ''}"
+
+def http_get(url):
+    req = urllib.request.Request(url, headers=({"Authorization": f"Bearer {TOKEN}"} if TOKEN else {}))
+    ctx = ssl.create_default_context()
+    with urllib.request.urlopen(req, context=ctx) as r: return r.read()
+
+def download(url, out):
+    req = urllib.request.Request(url, headers=({"Authorization": f"Bearer {TOKEN}"} if TOKEN else {}))
+    ctx = ssl.create_default_context()
+    with urllib.request.urlopen(req, context=ctx) as r, open(out,"wb") as w:
+        while True:
+            b=r.read(1024*1024)
+            if not b: break
+            w.write(b)
+
+if ASSET.endswith(".tar.gz"):
+    url=f"https://github.com/{GH_REPO}/releases/download/{TAG}/{ASSET}"
+    print("[DL]", url)
+    download(url, ASSET)
+    with tarfile.open(ASSET,"r:gz") as tf: tf.extractall(".")
+else:
+    rel = json.loads(http_get(f"https://api.github.com/repos/{GH_REPO}/releases/tags/{TAG}").decode())
+    urls=[a["browser_download_url"] for a in rel.get("assets",[])]
+    cls = sorted([u for u in urls if "cls_embedding.pkl.part_" in u])
+    feat= sorted([u for u in urls if "feature_dict_BRCA.pkl.part_" in u])
+    assert cls and feat, "missing part assets"
+    for u in cls+feat:
+        fn=u.rsplit("/",1)[-1]
         print("[DL]", fn)
-        subprocess.check_call(['bash','-lc', f'curl --http1.1 -fL -o "{fn}" "{u}"'])
+        download(u, fn)
+    # merge
+    with open("cls_embedding.pkl","wb") as out:
+        for p in cls:
+            with open(p.rsplit("/",1)[-1],"rb") as f: out.write(f.read())
+    with open("feature_dict_BRCA.pkl","wb") as out:
+        for p in feat:
+            with open(p.rsplit("/",1)[-1],"rb") as f: out.write(f.read())
+
+# sanity
+assert os.path.exists("cls_embedding.pkl") and os.path.exists("feature_dict_BRCA.pkl"), "missing PKLs"
+print("[OK] release prepared")
 PY
-  cat $(printf "%s\n" cls_embedding.pkl.part_* | LC_ALL=C sort) > cls_embedding.pkl
-  cat $(printf "%s\n" feature_dict_BRCA.pkl.part_* | LC_ALL=C sort) > feature_dict_BRCA.pkl
-  ls -lh cls_embedding.pkl feature_dict_BRCA.pkl
   """
 }
 
+// 2) repo-local 데이터(or parts) 사용
 process LOCAL_BREAST {
   tag "local"
-  cpus 1; memory '1 GB'; time '1h'
+  cpus 1
+  memory '1 GB'
+  time '1h'
   output:
   path "cls_embedding.pkl",     emit: cls
   path "feature_dict_BRCA.pkl", emit: feat
@@ -242,9 +240,12 @@ process LOCAL_BREAST {
   """
 }
 
+// 3) Train (+optional pipeline)
 process DRIVERFORMER_TRAIN {
   tag "train"
-  cpus 8; memory '32 GB'; time '48h'
+  cpus 8
+  memory '32 GB'
+  time '48h'
   publishDir params.out_dir, mode: 'copy', overwrite: true
   input:
   path cls_pkl
@@ -266,9 +267,12 @@ PY
   """
 }
 
+// 4) Pipeline-only
 process DRIVERFORMER_PIPE {
   tag "pipe"
-  cpus 4; memory '16 GB'; time '12h'
+  cpus 4
+  memory '16 GB'
+  time '12h'
   publishDir params.post_dir, mode: 'copy', overwrite: true
   input:
   path all_pred
@@ -297,16 +301,17 @@ workflow {
     return
   }
 
-  def CLS_USE
-  def FEAT_USE
+  // CLS/FEAT 선택: 외부 경로 → release → local
+  def CLS_CH
+  def FEAT_CH
   if (params.cls_file && params.feat_file) {
-    CLS_USE  = CLS_CH
-    FEAT_USE = FEAT_CH
+    CLS_CH  = Channel.fromPath(params.cls_file,  checkIfExists: true)
+    FEAT_CH = Channel.fromPath(params.feat_file, checkIfExists: true)
   } else {
     def out = params.use_release ? DOWNLOAD_BREAST_RELEASE() : LOCAL_BREAST()
-    CLS_USE  = out.cls
-    FEAT_USE = out.feat
+    CLS_CH  = out.cls
+    FEAT_CH = out.feat
   }
 
-  DRIVERFORMER_TRAIN( CLS_USE, FEAT_USE, MUT_FILE )
+  DRIVERFORMER_TRAIN( CLS_CH, FEAT_CH, MUT_FILE )
 }
