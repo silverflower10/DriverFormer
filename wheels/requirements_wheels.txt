@@ -1,0 +1,7 @@
+# Py3.10 호환 안정 버전(컨테이너: cp310, manylinux2014_x86_64 기준)
+pandas==2.2.2
+pyarrow==15.0.2
+scikit-learn==1.4.2
+tqdm==4.66.4
+PyYAML==6.0.2
+matplotlib==3.8.4
