@@ -1,4 +1,4 @@
-// main.nf — DriverFormer DSL2 (fixed: channels in workflow; repo-run; debug kept)
+// main.nf — DriverFormer DSL2 (channels fixed to positional; repo-run; debug kept)
 nextflow.enable.dsl = 2
 
 // ===== Params =====
@@ -66,7 +66,6 @@ process DRIVERFORMER_RUN {
   time '72h'
   publishDir "${params.out_dir}", mode: 'copy', overwrite: true
 
-  // ✔ 여기서는 '채널 변수'만 받습니다
   input:
     path CLS
     path FEAT
@@ -92,7 +91,7 @@ process DRIVERFORMER_RUN {
   export NUMEXPR_NUM_THREADS=${task.cpus}
   export PYTHONPATH="${projectDir}:\$PYTHONPATH"
 
-  # ────── 디버그 정보 (네 블록 그대로) ──────
+  # ────── 디버그 정보 ──────
   nvidia-smi || true
   which python || true
   python - <<'PYINFO'
@@ -109,11 +108,10 @@ except Exception as e:
 PYINFO
   echo "================================================="
 
-  # 모듈 존재 여부에 따라 분기
   LAUNCH=\$(python - <<'PY'
 import importlib
 try:
-    import driverformer  # noqa
+    import driverformer
     print("module")
 except Exception:
     print("nomodule")
@@ -196,15 +194,10 @@ workflow {
   need('feat_file', params.feat_file)
   need('mutations_file', params.mutations_file)
 
-  // ✔ 채널은 workflow 스코프에서 만든다
   ch_cls  = Channel.fromPath(params.cls_file)
   ch_feat = Channel.fromPath(params.feat_file)
   ch_muts = Channel.fromPath(params.mutations_file)
 
-  // 프로세스에 채널을 연결
-  DRIVERFORMER_RUN(
-    CLS:  ch_cls,
-    FEAT: ch_feat,
-    MUTS:  ch_muts
-  )
+  // ✔ 위치 인자로 순서대로 전달 (중요!)
+  DRIVERFORMER_RUN(ch_cls, ch_feat, ch_muts)
 }
