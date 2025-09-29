@@ -61,6 +61,7 @@ params.use_release  = params.use_release ?: false
 params.gh_repo      = params.gh_repo     ?: null         // e.g. silverflower10/DriverFormer
 params.release_tag  = params.release_tag ?: null         // e.g. breast-data-v1
 params.asset_name   = params.asset_name  ?: 'parts'      // 'parts' or tar.gz filename
+params.asset_sha256 = params.asset_sha256?: null         // optional for tar.gz
 params.gh_token     = params.gh_token    ?: null         // private release only
 
 // ==============================
@@ -84,7 +85,6 @@ def trainArgs() {
   a += "--cutmix-p ${params.cutmix_p} --num-data-workers ${params.num_data_workers} --torch-threads ${params.torch_threads}"
   a += "--len-alpha ${params.len_alpha} --res-beta ${params.res_beta}"
   if (params.run_pipeline) a += "--run-pipeline"
-  // pipeline options
   if (params.pipeline_gmm_auto) a += "--pipeline-gmm-auto"
   else a += "--pipeline-gmm-k ${params.pipeline_gmm_k}"
   a += "--pipeline-beta ${params.pipe_beta} --pipeline-gamma ${params.pipe_gamma}"
@@ -148,95 +148,97 @@ ALL_PRED = params.pipeline_only ? Channel.fromPath(params.all_pred, checkIfExist
 // Processes
 // ==============================
 
-// Python-only downloader (works in python:3.11 container)
+// ----(1) GitHub Release downloader (Python only) ----
 process DOWNLOAD_BREAST_RELEASE {
   tag "download:${params.release_tag ?: 'NA'}"
-  cpus 1; memory '3 GB'; time '3h'
+  cpus 1
+  memory '2 GB'
+  time '3h'
+
   output:
-    path "cls_embedding.pkl", emit: cls
-    path "feature_dict_BRCA.pkl", emit: feat
+  path "cls_embedding.pkl"
+  path "feature_dict_BRCA.pkl"
+
   when:
-    params.use_release
+  params.use_release
+
   script:
-  if (!params.gh_repo || !params.release_tag) {
-    throw new RuntimeException("use_release=true requires --gh_repo and --release_tag")
-  }
+  def tok = params.gh_token ? params.gh_token : ''
   """
   set -euo pipefail
   python - <<'PY'
-import os, sys, json, ssl
-from urllib.request import Request, urlopen
+  import os, sys, json, ssl, tarfile
+  from urllib.request import urlopen, Request
 
-GH_REPO   = "${params.gh_repo}"
-TAG       = "${params.release_tag}"
-ASSET     = "${params.asset_name}"
-TOKEN     = ${params.gh_token ? "'" + params.gh_token + "'" : "None"}
+  GH_REPO = "${params.gh_repo}"
+  TAG     = "${params.release_tag}"
+  ASSET   = "${params.asset_name}"  # "parts" or "breast_data.tar.gz"
+  TOKEN   = "${tok}" or None
 
-def http_get(url, headers=None):
-    req = Request(url)
-    if headers:
-        for k,v in headers.items(): req.add_header(k,v)
-    ctx = ssl.create_default_context()
-    return urlopen(req, context=ctx).read()
+  def http_get(url, headers=None):
+      req = Request(url)
+      if headers:
+          for k,v in headers.items(): req.add_header(k,v)
+      ctx = ssl.create_default_context()
+      with urlopen(req, context=ctx) as r:
+          return r.read()
 
-def download_to(url, out, headers=None):
-    req = Request(url)
-    if headers:
-        for k,v in headers.items(): req.add_header(k,v)
-    with urlopen(req) as r, open(out,"wb") as w:
-        while True:
-            chunk = r.read(1024*1024)
-            if not chunk: break
-            w.write(chunk)
+  def download_to(url, outfile, headers=None, chunk=1024*1024):
+      req = Request(url)
+      if headers:
+          for k,v in headers.items(): req.add_header(k,v)
+      ctx = ssl.create_default_context()
+      with urlopen(req, context=ctx) as r, open(outfile, 'wb') as w:
+          while True:
+              buf = r.read(chunk)
+              if not buf: break
+              w.write(buf)
 
-hdr = {"Accept":"application/vnd.github+json"}
-if TOKEN: hdr["Authorization"] = f"Bearer {TOKEN}"
+  hdr = {'Authorization': f'Bearer {TOKEN}'} if TOKEN else {}
 
-# case: tar.gz asset
-if ASSET.endswith(".tar.gz"):
-    url = f"https://github.com/{GH_REPO}/releases/download/{TAG}/{ASSET}"
-    download_to(url, ASSET, headers=hdr)
-    os.system(f"tar -xzf {ASSET}")
-    assert os.path.exists("cls_embedding.pkl") and os.path.exists("feature_dict_BRCA.pkl")
-    sys.exit(0)
+  if ASSET == "parts":
+      api = f"https://api.github.com/repos/{GH_REPO}/releases/tags/{TAG}"
+      rel = json.loads(http_get(api, headers=hdr).decode())
+      urls = [a.get('browser_download_url') for a in rel.get('assets', [])]
+      cls  = sorted([u for u in urls if u and 'cls_embedding.pkl.part_' in u])
+      feat = sorted([u for u in urls if u and 'feature_dict_BRCA.pkl.part_' in u])
+      if not cls or not feat:
+          print("[ERR] release missing part assets", file=sys.stderr); sys.exit(2)
 
-# case: parts - fetch asset list
-api = f"https://api.github.com/repos/{GH_REPO}/releases/tags/{TAG}"
-rel = json.loads(http_get(api, headers=hdr).decode())
-assets = rel.get("assets",[])
-urls = [a["browser_download_url"] for a in assets]
-cls = sorted([u for u in urls if "cls_embedding.pkl.part_" in u])
-feat= sorted([u for u in urls if "feature_dict_BRCA.pkl.part_" in u])
-if not cls or not feat:
-    print("[ERR] release missing part assets", file=sys.stderr); sys.exit(2)
+      with open("cls_embedding.pkl","wb") as out:
+          for u in cls:
+              fn = u.rsplit("/",1)[-1]
+              print("[DL]", fn)
+              download_to(u, fn, headers=hdr)
+              with open(fn,"rb") as p: out.write(p.read())
 
-# download all parts
-for u in cls + feat:
-    fn = u.split("/")[-1]
-    print("[DL]", fn)
-    download_to(u, fn, headers=hdr)
+      with open("feature_dict_BRCA.pkl","wb") as out:
+          for u in feat:
+              fn = u.rsplit("/",1)[-1]
+              print("[DL]", fn)
+              download_to(u, fn, headers=hdr)
+              with open(fn,"rb") as p: out.write(p.read())
 
-# assemble
-with open("cls_embedding.pkl","wb") as w:
-    for u in cls:
-        w.write(open(u.split("/")[-1],"rb").read())
-with open("feature_dict_BRCA.pkl","wb") as w:
-    for u in feat:
-        w.write(open(u.split("/")[-1],"rb").read())
-print("[OK] assembled:", os.path.getsize("cls_embedding.pkl"), os.path.getsize("feature_dict_BRCA.pkl"))
-PY
+  else:
+      url = f"https://github.com/{GH_REPO}/releases/download/{TAG}/{ASSET}"
+      print("[DL]", ASSET)
+      download_to(url, ASSET, headers=hdr)
+      with tarfile.open(ASSET, "r:gz") as tf:
+          tf.extractall(".")
+      if not (os.path.exists("cls_embedding.pkl") and os.path.exists("feature_dict_BRCA.pkl")):
+          print("[ERR] archive does not contain required PKL files", file=sys.stderr)
+          sys.exit(2)
+  PY
   """
 }
 
-// Use repo-local PKLs (or assemble from parts)
+// ----(2) repo-local 데이터(또는 분할 파트) 사용 ----
 process LOCAL_BREAST {
   tag "local"
   cpus 1; memory '1 GB'; time '1h'
-  output:
-    path "cls_embedding.pkl", emit: cls
-    path "feature_dict_BRCA.pkl", emit: feat
-  when:
-    !params.use_release
+  output: path "cls_embedding.pkl", emit: cls
+          path "feature_dict_BRCA.pkl", emit: feat
+  when: !params.use_release
   script:
   """
   set -euo pipefail
@@ -254,15 +256,14 @@ process LOCAL_BREAST {
   """
 }
 
-// Train (+optional pipeline)
+// ----(3) Train (+optional pipeline) ----
 process DRIVERFORMER_TRAIN {
   tag "train"
   cpus 8; memory '32 GB'; time '48h'
   publishDir params.out_dir, mode: 'copy', overwrite: true
-  input:
-    path cls_pkl
-    path feat_pkl
-    path mut_file
+  input: path cls_pkl
+         path feat_pkl
+         path mut_file
   script:
   def A = trainArgs()
   """
@@ -279,7 +280,7 @@ PY
   """
 }
 
-// Pipeline-only
+// ----(4) Pipeline-only ----
 process DRIVERFORMER_PIPE {
   tag "pipe"
   cpus 4; memory '16 GB'; time '12h'
