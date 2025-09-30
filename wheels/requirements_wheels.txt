@@ -14,3 +14,4 @@ einops==0.7.0
 
 # (pandas/pyarrow 연동 필요시)
 pyarrow==15.0.2
+patsy==0.5.6
