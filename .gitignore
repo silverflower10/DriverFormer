@@ -23,3 +23,20 @@ main.nf.bak_*
 nextflow.config.bak_*
 release_assets_*/
 # keep offline wheels
+
+# avoid huge/invalid wheels
+wheels/torch-*.whl
+wheels/triton-*.whl
+wheels/*cp39*.whl
+
+# avoid huge CUDA/NVIDIA wheels (bundled in container)
+wheels/nvidia_*.whl
+wheels/*cu12*.whl
+wheels/*cudnn*.whl
+wheels/*cublas*.whl
+wheels/*cusparse*.whl
+wheels/*cusparselt*.whl
+wheels/*cusolver*.whl
+wheels/*nccl*.whl
+# also avoid wrong-Python wheels
+wheels/*cp39*.whl

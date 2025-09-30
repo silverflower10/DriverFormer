@@ -9,7 +9,7 @@ PyYAML==6.0.2
 
 # ---- extras used in code ----
 statsmodels==0.14.2
-rotary-embedding-torch==0.4.6
+rotary-embedding-torch==0.8.9
 einops==0.7.0
 
 # (pandas/pyarrow 연동 필요시)
