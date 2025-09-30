@@ -1,38 +1,56 @@
-# Dockerfile (Python 3.12 + PyTorch 2.4.0 cu121, use local cp312 wheels)
+# Dockerfile (Python 3.12 + PyTorch 2.4.0 cu121, local cp312 wheels, DIAG MODE)
 FROM python:3.12-slim
 
 ARG DEBIAN_FRONTEND=noninteractive
 
-# 런타임에 자주 필요한 라이브러리(이미지/GUI 백엔드 등)
-# libgl1, libglib2.0-0: matplotlib/pillow에서 필요할 수 있음
+# 런타임에 자주 필요한 라이브러리
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl \
       libgl1 libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# PyTorch 2.4.0 (CUDA 12.1) 설치
-# 참고: https://pytorch.org/get-started/previous-versions/
+# PyTorch 2.4.0 (CUDA 12.1)
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
     pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu121 \
         torch==2.4.0 torchvision==0.19.0 torchaudio==2.4.0
 
-# 작업 디렉토리
 WORKDIR /opt/driverformer
 
-# 리포(코드 + wheels/)를 그대로 복사
-#  - 반드시 리포 루트에 wheels/*.whl 들이 들어있어야 함 (cp312)
+# 리포(코드 + wheels/) 복사
 COPY . /opt/driverformer/repo
 
-# 로컬 wheels만 설치 (PyPI 접속 없이)
-#  - cp312 wheel이어야 설치 성공 (컨테이너 Python이 3.12)
-RUN if ls repo/wheels/*.whl >/dev/null 2>&1; then \
-      echo "[INFO] Installing local wheels (no-index)"; \
-      pip install --no-cache-dir --no-index --find-links=repo/wheels repo/wheels/*.whl; \
+# ─────────────────────────────────────────────────────────────
+# 진단 1) 파이썬/플랫폼 & wheels 목록/ABI 태그 출력
+# ─────────────────────────────────────────────────────────────
+RUN python -V && python -c "import sys,platform;print(sys.version);print(platform.platform())" && \
+    ls -l repo/wheels || true && \
+    (ls repo/wheels/*.whl 2>/dev/null | sed -E 's|.*-(cp[0-9]{2,}).*|\1|' | sort -u || true)
+
+# ─────────────────────────────────────────────────────────────
+# 진단 2) wheel 개별 설치 (어떤 파일에서 실패하는지 정확히 출력)
+#  - cp312 아니거나 win/macos wheel이면 미리 스킵
+# ─────────────────────────────────────────────────────────────
+RUN set -euo pipefail; \
+    if ls repo/wheels/*.whl >/dev/null 2>&1; then \
+      echo "[INFO] Installing wheels one-by-one (no-index)"; \
+      for w in $(ls repo/wheels/*.whl | sort); do \
+        # 필터: cp312만 통과, macOS/win wheel은 스킵
+        if ! echo "$w" | grep -qE '-cp312-'; then echo "[SKIP ABI] $w"; continue; fi; \
+        if echo "$w" | grep -qiE '(macosx|win_amd64)'; then echo "[SKIP PLAT] $w"; continue; fi; \
+        echo "----- INSTALL $w -----"; \
+        pip install -v --no-cache-dir --no-index --find-links=repo/wheels "$w" || { \
+          echo "===== FAILED WHEEL: $w ====="; \
+          python -V; \
+          echo "ABI tag:"; echo "$w" | sed -E 's|.*-(cp[0-9]{2,}).*|\1|'; \
+          echo "Platform tags:"; echo "$w" | sed -E 's|.*-(manylinux[^.]+|musllinux[^.]+|linux[^.]+|macosx[^.]+|win_amd64).*|\1|' || true; \
+          exit 1; \
+        }; \
+      done; \
     else \
-      echo "[WARN] No wheels found under repo/wheels; skipping local wheel install"; \
+      echo "[WARN] No wheels found under repo/wheels"; \
     fi
 
-# (선택) 남은 의존성 보충이 필요하면 주석 해제 (가능하면 안 쓰는 걸 권장)
+# (선택) 남은 의존성 보충
 # RUN if [ -f repo/requirements.txt ]; then \
 #       pip install --no-cache-dir -r repo/requirements.txt; \
 #     fi
@@ -40,7 +58,7 @@ RUN if ls repo/wheels/*.whl >/dev/null 2>&1; then \
 # 파이썬 모듈 경로
 ENV PYTHONPATH=/opt/driverformer/repo:${PYTHONPATH}
 
-# 실행 스크립트: 환경변수로 파라미터 받음
+# 실행 스크립트
 COPY <<'BASH' /opt/driverformer/run.sh
 #!/usr/bin/env bash
 set -euo pipefail
@@ -71,7 +89,7 @@ cmd=( python -u -m driverformer
   --lr "${LR}" --batch-size "${BATCH_SIZE}" --epochs "${EPOCHS}" --seed "${SEED}"
   --d-model "${D_MODEL}" --nhead "${NHEAD}" --num-layers "${NUM_LAYERS}" --dim-feedforward "${DIM_FEEDFORWARD}"
   --dropout "${DROPOUT}" --max-seq-len "${MAX_SEQ_LEN}" --overlap-factor "${OVERLAP_FACTOR}"
-  --huber-factor "${HUBER_FACTOR}" --cutm ix-p "${CUTMIX_P}" --num-data-workers "${NUM_DATA_WORKERS}"
+  --huber-factor "${HUBER_FACTOR}" --cutmix-p "${CUTMIX_P}" --num-data-workers "${NUM_DATA_WORKERS}"
   --torch-threads "${TORCH_THREADS}" --len-alpha "${LEN_ALPHA}" --res-beta "${RES_BETA}" )
 
 [ -n "${MUTATIONS_FILE}" ] && cmd+=( --mutations-file "${MUTATIONS_FILE}" )
