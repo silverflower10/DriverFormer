@@ -1,0 +1,83 @@
+name: Build & Push to GHCR
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Image tag to push (e.g., 0.1.0)"
+        required: false
+        default: latest
+      git_ref:
+        description: "Git ref to build (branch/tag; used by Dockerfile GIT_REF)"
+        required: false
+        default: main
+  push:
+    branches: [ main ]
+    paths:
+      - 'Dockerfile'
+      - '**/*.py'
+      - '**/requirements.txt'
+  create:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE_NAME: ghcr.io/silverflower10/driverformer
+  DEFAULT_TAG: latest
+  DEFAULT_REF: main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set build variables
+        id: vars
+        run: |
+          IMAGE_TAG="${{ github.event.inputs.image_tag || env.DEFAULT_TAG }}"
+          GIT_REF_INPUT="${{ github.event.inputs.git_ref || env.DEFAULT_REF }}"
+          if [[ "${{ github.event_name }}" == "create" && "${{ github.ref_type }}" == "tag" ]]; then
+            IMAGE_TAG="${{ github.ref_name }}"
+            IMAGE_TAG="${IMAGE_TAG#v}"
+            GIT_REF_INPUT="${{ github.ref_name }}"
+          fi
+          echo "IMAGE_TAG=${IMAGE_TAG}"         >> $GITHUB_OUTPUT
+          echo "GIT_REF_INPUT=${GIT_REF_INPUT}" >> $GITHUB_OUTPUT
+          echo "Final image tag: ${IMAGE_TAG}"
+          echo "Build GIT_REF: ${GIT_REF_INPUT}"
+
+      - name: Set up QEMU (optional)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: GHCR login
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.IMAGE_TAG }}
+            ${{ github.ref == 'refs/heads/main' && format('{0}:{1}', env.IMAGE_NAME, 'latest') || '' }}
+          build-args: |
+            GIT_REF=${{ steps.vars.outputs.GIT_REF_INPUT }}
+          # cache-from: type=gha
+          # cache-to: type=gha,mode=max
