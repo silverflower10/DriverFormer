@@ -89,7 +89,6 @@ process DRIVERFORMER_RUN {
   export OPENBLAS_NUM_THREADS=!{task.cpus}
   export NUMEXPR_NUM_THREADS=!{task.cpus}
   export PYTHONPATH="$PWD:$PWD/driverformer${PYTHONPATH:+:$PYTHONPATH}"
-  echo "[INFO] PYTHONPATH head:"; echo "$PYTHONPATH" | tr ':' '\n' | head -n 3
 
   # ---- wheels link (if exists) ----
   if [ -d "!{WHEELS_DIR}" ]; then
@@ -183,13 +182,13 @@ PYINFO
     --pipeline-dp-gap-bp       !{params.pipeline_dp_gap_bp} \
     --postsel-fdr-method       '!{params.postsel_fdr_method}' \
     --postsel-bootstrap        !{params.postsel_bootstrap} \
-    --postsel-lambda-start     !{params.postsel_lambda_start} \
-    --postsel-lambda-end       !{params.postsel_lambda_end} \
-    --postsel-lambda-step      !{params.postsel_lambda_step} \
-    --postsel-pi0-floor        !{params.postsel_pi0_floor} \
-    --postsel-pi0-ceil         !{params.postsel_pi0_ceil}'"
+    --postsel-lambda-start     '!{params.postsel_lambda_start}' \
+    --postsel-lambda-end       '!{params.postsel_lambda_end}' \
+    --postsel-lambda-step      '!{params.postsel_lambda_step}' \
+    --postsel-pi0-floor        '!{params.postsel_pi0_floor}' \
+    --postsel-pi0-ceil         '!{params.postsel_pi0_ceil}'"
 
-  # --- robust segment_lengths handling (value exists → add) ---
+  # robust segment_lengths (value exists → add)
   _raw_seglen="!{ (params.segment_lengths instanceof List) ? params.segment_lengths.join(' ') : (params.segment_lengths ? params.segment_lengths.toString() : '') }"
   SEGLEN=$(echo "$_raw_seglen" | tr ',' ' ' | sed -e 's/^ *//; s/ *$//' -e 's/  \+/ /g' -e 's/^"//; s/"$//')
   [ -n "$SEGLEN" ] && COMMON_ARGS="$COMMON_ARGS --segment-lengths $SEGLEN"
