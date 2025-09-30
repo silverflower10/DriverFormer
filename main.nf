@@ -166,7 +166,6 @@ PYINFO
     --dim-feedforward     !{params.dim_feedforward} \
     --dropout             !{params.dropout} \
     --max-seq-len         !{params.max_seq_len} \
-    --segment-lengths     '!{params.segment_lengths.join(' ')}' \
     --overlap-factor      !{params.overlap_factor} \
     --huber-factor        !{params.huber_factor} \
     --cutmix-p            !{params.cutmix_p} \
@@ -193,6 +192,13 @@ PYINFO
     --postsel-lambda-step      !{params.postsel_lambda_step} \
     --postsel-pi0-floor        !{params.postsel_pi0_floor} \
     --postsel-pi0-ceil         !{params.postsel_pi0_ceil}'"
+
+  # --- robust segment_lengths handling (CloudOS UI-safe) ---
+  _raw_seglen="!{ (params.segment_lengths instanceof List) ? params.segment_lengths.join(' ') : (params.segment_lengths ? params.segment_lengths.toString() : '') }"
+  # 쉼표→공백, 양끝/중복 공백/따옴표 제거
+  SEGLEN=$(echo "$_raw_seglen" | tr ',' ' ' | sed -e 's/^ *//; s/ *$//' -e 's/  \+/ /g' -e 's/^"//; s/"$//')
+  # 값이 있을 때만 옵션 추가(비어있으면 붙이지 않음)
+  [ -n "$SEGLEN" ] && COMMON_ARGS="$COMMON_ARGS --segment-lengths $SEGLEN"
 
   FLAGS=""
   [ "!{params.use_mad}"      = "true" ] && FLAGS="${FLAGS} --use-mad"
