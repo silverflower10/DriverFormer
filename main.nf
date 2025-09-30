@@ -6,11 +6,9 @@ params.cls_file        = params.cls_file        ?: null
 params.feat_file       = params.feat_file       ?: null
 params.mutations_file  = params.mutations_file  ?: null
 params.out_dir         = params.out_dir         ?: 'results/run'
-
-// 설치 단계 on/off (기본: true)
 params.setup_deps      = (params.setup_deps in [false,'false',0,'0']) ? false : true
 
-// 학습/파이프라인 주요 파라미터
+// Train/Pipeline key params
 params.lr              = (params.lr ?: 2e-4)
 params.batch_size      = (params.batch_size ?: 128)
 params.epochs          = (params.epochs ?: 20)
@@ -60,19 +58,20 @@ process SETUP_DEPS {
 
   input:
     path REQS        // requirements.txt 또는 더미
-    path WHEELS_DIR  // wheels/ 디렉토리 또는 더미
+    path WHEELS_DIR  // wheels/ 또는 더미
 
   output:
     path "venv", emit: VENV
 
-  // 한 줄 script (triple quotes 없음)
+  // 한 줄 script — 모든 $ 는 \$ 로 이스케이프
   script:
     "python -m venv venv && " +
     ". venv/bin/activate && " +
     "python -m pip install -U pip wheel setuptools --no-cache-dir && " +
-    // requirements.txt 있으면 설치
-    "[ -f '!{REQS}' ] && [ \"$(basename '!{REQS}')\" = 'requirements.txt' ] && python -m pip install -r '!{REQS}' --no-cache-dir || true && " +
-    // wheels 폴더 있으면 오프라인 설치
+    // basename 비교 (Groovy 보간 방지를 위해 \$ 사용)
+    "REQ_BN=\\\$(basename '!{REQS}'); " +
+    "[ -f '!{REQS}' ] && [ \"\\\$REQ_BN\" = 'requirements.txt' ] && python -m pip install -r '!{REQS}' --no-cache-dir || true && " +
+    // wheels 오프라인 설치 (있으면)
     "[ -d '!{WHEELS_DIR}' ] && python -m pip install --no-index --find-links '!{WHEELS_DIR}' '!{WHEELS_DIR}'/*.whl || true"
 }
 
@@ -91,25 +90,21 @@ process DRIVERFORMER_RUN {
     path "stdout.txt"
     path "stderr.txt"
 
-  // script 블록: Groovy로 한 줄 명령 구성(삼중따옴표/!{} 없음)
   script:
   {
-    // segment_lengths 정규화 (리스트/문자열 → 공백/숫자만)
+    // segment_lengths 정규화
     def segRaw  = params.segment_lengths ? (params.segment_lengths instanceof List ? params.segment_lengths.join(' ') : params.segment_lengths.toString()) : ''
     def segNorm = segRaw.replace(',', ' ').trim().replaceAll(/\s+/, ' ').replaceAll(/^\"|\"$/, '')
     def segNums = segNorm ? segNorm.split(/\s+/).findAll{ it ==~ /\d+/ }.join(' ') : ''
     def segOpt  = segNums ? "--segment-lengths ${segNums} " : ""
 
-    // 플래그
     def flags = ''
     if (params.use_mad)      flags += '--use-mad '
     if (params.label_roll)   flags += '--label-roll '
     if (params.run_pipeline) flags += '--run-pipeline '
 
-    // venv 활성화(디렉토리인 경우에만)
     def venvAct = "[ -d '!{VENV}' ] && . '!{VENV}/bin/activate' || true; "
 
-    // 실행 커맨드
     def cmd =
       venvAct +
       "python -u -m driverformer " +
@@ -142,12 +137,10 @@ workflow {
   if( !params.feat_file )      error "Missing required param: --feat_file"
   if( !params.mutations_file ) error "Missing required param: --mutations_file"
 
-  // 데이터
   ch_cls  = Channel.fromPath(params.cls_file)
   ch_feat = Channel.fromPath(params.feat_file)
   ch_muts = Channel.fromPath(params.mutations_file)
 
-  // requirements & wheels 채널 (없으면 더미)
   ch_reqs_exist = Channel.fromPath("${projectDir}/requirements.txt", checkIfExists: true)
   ch_dummy      = Channel.fromPath("${projectDir}/driverformer/__init__.py", checkIfExists: true)
   ch_reqs   = ch_reqs_exist.ifEmpty(ch_dummy)
@@ -159,7 +152,6 @@ workflow {
     SETUP_DEPS(ch_reqs, ch_wheels)
     DRIVERFORMER_RUN(ch_cls, ch_feat, ch_muts, SETUP_DEPS.out.VENV)
   } else {
-    // 설치 off: 더미를 VENV 자리에 넣어 입력 항상 만족 (optional 사용 안 함)
     DRIVERFORMER_RUN(ch_cls, ch_feat, ch_muts, ch_dummy)
   }
 }
