@@ -7,10 +7,10 @@ params.feat_file       = params.feat_file       ?: null
 params.mutations_file  = params.mutations_file  ?: null
 params.out_dir         = params.out_dir         ?: 'results/run'
 
-// (학습/파이프라인 파라미터 — 동일)
+// training/pipeline defaults
 params.lr              = (params.lr ?: 2e-4)
 params.batch_size      = (params.batch_size ?: 128)
-params.epochs          = (params.epochs ?: 2)
+params.epochs          = (params.epochs ?: 20)
 params.seed            = (params.seed ?: 42)
 params.d_model         = (params.d_model ?: 768)
 params.nhead           = (params.nhead  ?: 8)
@@ -78,57 +78,53 @@ process DRIVERFORMER_RUN {
 
   echo "[INFO] PWD = $(pwd)"
   ls -al | sed 's/^/  /' || true
-  echo "[INFO] driverformer/:"; ls -al driverformer | sed 's/^/  /' || true
+  echo "[INFO] driverformer/:"
+  ls -al driverformer | sed 's/^/  /' || true
 
+  # ---- env & PYTHONPATH ----
   export MPLBACKEND=Agg
   export TOKENIZERS_PARALLELISM=false
   export OMP_NUM_THREADS=!{task.cpus}
   export MKL_NUM_THREADS=!{task.cpus}
   export OPENBLAS_NUM_THREADS=!{task.cpus}
   export NUMEXPR_NUM_THREADS=!{task.cpus}
-
-  # PYTHONPATH
   export PYTHONPATH="$PWD:$PWD/driverformer${PYTHONPATH:+:$PYTHONPATH}"
-  echo "[INFO] PYTHONPATH head = $(echo "$PYTHONPATH" | tr ':' '\n' | head -n 3)"
+  echo "[INFO] PYTHONPATH head:"; echo "$PYTHONPATH" | tr ':' '\n' | head -n 3
 
-  # ---- wheels 디렉토리 표준 이름으로 연결(있을 때만) ----
+  # ---- wheels link (if exists) ----
   if [ -d "!{WHEELS_DIR}" ]; then
     [ "!{WHEELS_DIR}" = "wheels" ] || ln -s "!{WHEELS_DIR}" wheels 2>/dev/null || cp -r "!{WHEELS_DIR}" wheels
-    echo "[INFO] wheels/ staged:"; ls -al wheels | sed 's/^/  /' || true
+    echo "[INFO] wheels/:"; ls -al wheels | sed 's/^/  /' || true
   else
     echo "[INFO] no wheels directory staged"
   fi
 
-  # ===== pip 설치(SSL-safe) =====
+  # ===== pip install (SSL-safe) =====
   PIP_OPTS="--no-cache-dir --retries 5 --timeout 60 \
             --index-url https://pypi.org/simple \
             --trusted-host pypi.org --trusted-host files.pythonhosted.org"
   python -m pip install -U pip wheel setuptools $PIP_OPTS || true
 
-  # requirements.txt 있을 때만 설치
+  # requirements.txt (filtered)
   if [ -f "!{REQS}" ] && [ "$(basename "!{REQS}")" = "requirements.txt" ]; then
     echo "[SETUP] Installing requirements.txt (filtered)"
-    grep -viE '^(torch|torchvision|torchaudio|pytorch-triton|triton|nvidia-|cuda|cudnn|cudatoolkit)' \
-      "!{REQS}" > .req_filtered.txt || true
+    grep -viE '^(torch|torchvision|torchaudio|pytorch-triton|triton|nvidia-|cuda|cudnn|cudatoolkit)' "!{REQS}" > .req_filtered.txt || true
     [ -s .req_filtered.txt ] && python -m pip install $PIP_OPTS -r .req_filtered.txt || echo "[SETUP] nothing to install from requirements.txt"
   else
     echo "[SETUP] No requirements.txt — skipping"
   fi
 
-  # 로컬 wheels 폴백
+  # wheels fallback (offline)
   if [ -d wheels ]; then
     echo "[SETUP] Installing from local wheels (offline fallback)"
-    # 목록 파일이 있으면 우선 사용
-    if [ -f wheels/requirements_wheels.txt ]; then
-      python -m pip install --no-index --find-links wheels -r wheels/requirements_wheels.txt || true
-    fi
-    # 남은 *.whl 일괄 설치(순서 무관)
+    [ -f wheels/requirements_wheels.txt ] && python -m pip install --no-index --find-links wheels -r wheels/requirements_wheels.txt || true
     ls wheels/*.whl >/dev/null 2>&1 && python -m pip install --no-index --find-links wheels wheels/*.whl || true
   fi
 
-  # 핵심 패키지 보충
+  # auto top-up
   MISSING=$(python - <<'PY'
-mods = ["pandas","pyarrow","scikit-learn","tqdm","pyyaml","matplotlib","statsmodels","patsy","rotary_embedding_torch","einops"]
+mods = ["pandas","pyarrow","scikit-learn","tqdm","pyyaml","matplotlib",
+        "statsmodels","patsy","rotary_embedding_torch","einops"]
 import importlib.util
 print(" ".join([m for m in mods if not importlib.util.find_spec(m)]))
 PY
@@ -137,7 +133,6 @@ PY
     echo "[SETUP] Installing missing packages: $MISSING"
     python -m pip install $PIP_OPTS $MISSING || echo "[WARN] missing packages install failed"
   fi
-  # ======================================
 
   which python || true
   python - <<'PYINFO'
@@ -151,61 +146,60 @@ except Exception:
     print("driverformer import: FAIL — traceback:"); traceback.print_exc()
 PYINFO
 
+  # ---- COMMON_ARGS (parser-safe; no segment-lengths yet) ----
   COMMON_ARGS="\
-    --cls-file               '!{CLS}' \
-    --feat-file              '!{FEAT}' \
-    --mutations-file         '!{MUTS}' \
-    --out-dir                '!{params.out_dir}' \
-    --lr                     !{params.lr} \
-    --batch-size             !{params.batch_size} \
-    --epochs                 !{params.epochs} \
-    --seed                   !{params.seed} \
-    --d-model                !{params.d_model} \
-    --nhead                  !{params.nhead} \
-    --num-layers             !{params.num_layers} \
-    --dim-feedforward        !{params.dim_feedforward} \
-    --dropout                !{params.dropout} \
-    --max-seq-len            !{params.max_seq_len} \
-    --overlap-factor         !{params.overlap_factor} \
-    --huber-factor           !{params.huber_factor} \
-    --cutmix-p               !{params.cutmix_p} \
-    --num-data-workers       !{params.num_data_workers} \
-    --torch-threads          !{params.torch_threads} \
-    --len-alpha              !{params.len_alpha} \
-    --res-beta               !{params.res_beta} \
-    --label-roll-width       !{params.label_roll_width} \
-    --pipeline-out-dir       '!{params.pipeline_out_dir}' \
-    --pipeline-chunk-size    !{params.pipeline_chunk_size} \
-    --pipeline-chunk-overlap !{params.pipeline_chunk_overlap} \
-    --pipeline-min-distance  !{params.pipeline_min_distance} \
-    --pipeline-max-distance  !{params.pipeline_max_distance} \
-    --pipeline-sample-frac   !{params.pipeline_sample-frac} \
-    --pipeline-gmm-k         !{params.pipeline_gmm_k} \
-    --pipeline-beta          !{params.pipeline_beta} \
-    --pipeline-gamma         !{params.pipeline_gamma} \
-    --pipeline-seed          !{params.pipeline_seed} \
-    --pipeline-dp-gap-bp     !{params.pipeline_dp_gap_bp} \
-    --postsel-fdr-method     '!{params.postsel_fdr_method}' \
-    --postsel-bootstrap      !{params.postsel_bootstrap} \
-    --postsel-lambda-start   !{params.postsel_lambda_start} \
-    --postsel-lambda-end     !{params.postsel_lambda_end} \
-    --postsel-lambda-step    !{params.postsel_lambda_step} \
-    --postsel-pi0-floor      !{params.postsel_pi0_floor} \
-    --postsel-pi0-ceil       !{params.postsel_pi0_ceil}"
+    --cls-file            '!{CLS}' \
+    --feat-file           '!{FEAT}' \
+    --mutations-file      '!{MUTS}' \
+    --out-dir             '!{params.out_dir}' \
+    --lr                  !{params.lr} \
+    --batch-size          !{params.batch_size} \
+    --epochs              !{params.epochs} \
+    --seed                !{params.seed} \
+    --d-model             !{params.d_model} \
+    --nhead               !{params.nhead} \
+    --num-layers          !{params.num_layers} \
+    --dim-feedforward     !{params.dim_feedforward} \
+    --dropout             !{params.dropout} \
+    --max-seq-len         !{params.max_seq_len} \
+    --overlap-factor      !{params.overlap_factor} \
+    --huber-factor        !{params.huber_factor} \
+    --cutmix-p            !{params.cutmix_p} \
+    --num-data-workers    !{params.num_data_workers} \
+    --torch-threads       !{params.torch_threads} \
+    --len-alpha           !{params.len_alpha} \
+    --res-beta            !{params.res_beta} \
+    --label-roll-width    !{params.label_roll_width} \
+    --pipeline-out-dir         '!{params.pipeline_out_dir}' \
+    --pipeline-chunk-size      !{params.pipeline_chunk_size} \
+    --pipeline-chunk-overlap   !{params.pipeline_chunk_overlap} \
+    --pipeline-min-distance    !{params.pipeline_min_distance} \
+    --pipeline-max-distance    !{params.pipeline_max_distance} \
+    --pipeline-sample-frac     !{params.pipeline_sample_frac} \
+    --pipeline-gmm-k           !{params.pipeline_gmm_k} \
+    --pipeline-beta            !{params.pipeline_beta} \
+    --pipeline-gamma          !{params.pipeline_gamma} \
+    --pipeline-seed            !{params.pipeline_seed} \
+    --pipeline-dp-gap-bp       !{params.pipeline_dp_gap_bp} \
+    --postsel-fdr-method       '!{params.postsel_fdr_method}' \
+    --postsel-bootstrap        !{params.postsel_bootstrap} \
+    --postsel-lambda-start     !{params.postsel_lambda_start} \
+    --postsel-lambda-end       !{params.postsel_lambda_end} \
+    --postsel-lambda-step      !{params.postsel_lambda_step} \
+    --postsel-pi0-floor        !{params.postsel_pi0_floor} \
+    --postsel-pi0-ceil         !{params.postsel_pi0_ceil}'"
 
-
-  # --- robust segment_lengths handling (CloudOS UI-safe) ---
+  # --- robust segment_lengths handling (value exists → add) ---
   _raw_seglen="!{ (params.segment_lengths instanceof List) ? params.segment_lengths.join(' ') : (params.segment_lengths ? params.segment_lengths.toString() : '') }"
-  # 쉼표→공백, 양끝/중복 공백/따옴표 제거
   SEGLEN=$(echo "$_raw_seglen" | tr ',' ' ' | sed -e 's/^ *//; s/ *$//' -e 's/  \+/ /g' -e 's/^"//; s/"$//')
-  # 값이 있을 때만 옵션 추가(비어있으면 붙이지 않음)
+  [ -n "$SEGLEN" ] && COMMON_ARGS="$COMMON_ARGS --segment-lengths $SEGLEN"
 
   FLAGS=""
   [ "!{params.use_mad}"      = "true" ] && FLAGS="${FLAGS} --use-mad"
   [ "!{params.label_roll}"   = "true" ] && FLAGS="${FLAGS} --label-roll"
   [ "!{params.run_pipeline}" = "true" ] && FLAGS="${FLAGS} --run-pipeline"
 
-  if python - <<<'import importlib.util; import sys; print(1 if importlib.util.find_spec("driverformer") else 0)'; then
+  if python - <<<'import importlib.util as u; print(1 if u.find_spec("driverformer") else 0)'; then
     echo "[RUN] python -m driverformer ..."
     set -x; python -u -m driverformer ${COMMON_ARGS} ${FLAGS}; set +x
   else
@@ -228,19 +222,21 @@ workflow {
   if( !params.feat_file )      error "Missing required param: --feat_file"
   if( !params.mutations_file ) error "Missing required param: --mutations_file"
 
+  // data
   ch_cls   = Channel.fromPath(params.cls_file)
   ch_feat  = Channel.fromPath(params.feat_file)
   ch_muts  = Channel.fromPath(params.mutations_file)
 
+  // repo staging
   ch_pkg    = Channel.fromPath("${projectDir}/driverformer",         checkIfExists: true)
   ch_train  = Channel.fromPath("${projectDir}/trainDriverFormer.py", checkIfExists: true)
 
-  // requirements.txt(있으면) 또는 더미 파일(항상 전달)
+  // requirements.txt (or dummy)
   ch_reqs_exist = Channel.fromPath("${projectDir}/requirements.txt",         checkIfExists: true)
   ch_reqs_dummy = Channel.fromPath("${projectDir}/driverformer/__init__.py", checkIfExists: true)
   ch_reqs  = ch_reqs_exist.ifEmpty(ch_reqs_dummy)
 
-  // wheels 디렉토리(있으면) 또는 더미(항상 전달)
+  // wheels directory (or dummy)
   ch_wheels_exist = Channel.fromPath("${projectDir}/wheels",                 checkIfExists: true)
   ch_wheels_dummy = Channel.fromPath("${projectDir}/driverformer/__init__.py", checkIfExists: true)
   ch_wheels = ch_wheels_exist.ifEmpty(ch_wheels_dummy)
