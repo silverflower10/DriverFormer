@@ -7,9 +7,12 @@ params.feat_file       = params.feat_file       ?: null
 params.mutations_file  = params.mutations_file  ?: null
 params.out_dir         = params.out_dir         ?: 'results/run'
 
-// training/pipeline defaults (괄호 제거)
+// 설치 스위치(온라인 불가 환경/사전 빌드 컨테이너에서는 false로)
+params.setup_deps      = (params.setup_deps in [false,'false',0,'0']) ? false : true
+
+// training/pipeline defaults
 params.lr              = params.lr              ?: 2e-4
-params.batch_size      = params.batch_size      ?: 8
+params.batch_size      = params.batch_size      ?: 16
 params.epochs          = params.epochs          ?: 2
 params.seed            = params.seed            ?: 42
 params.d_model         = params.d_model         ?: 768
@@ -23,7 +26,7 @@ params.overlap_factor  = params.overlap_factor  ?: 0.3
 params.use_mad         = params.use_mad         ?: true
 params.huber_factor    = params.huber_factor    ?: 3.0
 params.cutmix_p        = params.cutmix_p        ?: 0.2
-params.num_data_workers= params.num_data_workers?: 2
+params.num_data_workers= params.num_data_workers?: 8
 params.torch_threads   = params.torch_threads   ?: 8
 params.len_alpha       = params.len_alpha       ?: 0.5
 params.res_beta        = params.res_beta        ?: 0.5
@@ -55,21 +58,22 @@ process DRIVERFORMER_RUN {
   tag "driverformer"
   publishDir "${params.out_dir}", mode: 'copy', overwrite: true
   label 'gpu'        // ← config의 withLabel: gpu { accelerator 1 } 적용
-// 리스트/문자열 → "10 50 100" 으로 정규화해서 env로 주입(문자열 대입)
-def SEGLEN_VAL = (
-  (params.segment_lengths instanceof List
-    ? params.segment_lengths.join(' ')
-    : (params.segment_lengths ?: '')
-  ).toString().trim().replaceAll(',', ' ').replaceAll(/\s+/, ' ')
-)
-env 'SEGLEN', SEGLEN_VAL
+
+  // 리스트/문자열 → "10 50 100" 으로 정규화해서 env로 주입(문자열 대입)
+  def SEGLEN_VAL = (
+    (params.segment_lengths instanceof List
+      ? params.segment_lengths.join(' ')
+      : (params.segment_lengths ?: '')
+    ).toString().trim().replaceAll(',', ' ').replaceAll(/\s+/, ' ')
+  )
+  env 'SEGLEN', SEGLEN_VAL
 
   input:
     path CLS
     path FEAT
     path MUTS
-    path DF_PKG,    stageAs: 'driverformer'          // ← 이름 고정
-    path TRAIN_PY,  stageAs: 'trainDriverFormer.py'  // ← 이름 고정
+    path DF_PKG,    stageAs: 'driverformer'
+    path TRAIN_PY,  stageAs: 'trainDriverFormer.py'
     path REQS
     path WHEELS_DIR
 
@@ -80,15 +84,20 @@ env 'SEGLEN', SEGLEN_VAL
   shell:
   '''
   set -euo pipefail
-  SEGLEN="${SEGLEN:-}"   
+  SEGLEN="${SEGLEN:-}"
   exec > >(tee stdout.txt) 2> >(tee stderr.txt >&2)
+
+  # ==== workspace/TMP 설정 (/dev/shm 압박 완화) ====
+  mkdir -p .tmp .pip_cache || true
+  export TMPDIR="$PWD/.tmp"
+  export PIP_CACHE_DIR="$PWD/.pip_cache"
 
   echo "[INFO] PWD = $(pwd)"
   ls -al | sed 's/^/  /' || true
 
   # ==== stage paths to predictable names ====
   echo "[INFO] driverformer/:"; ls -al driverformer | sed 's/^/  /' || true
-[ -d driverformer ] || { echo "[FATAL] driverformer dir not staged"; ls -al; exit 3; }
+  [ -d driverformer ] || { echo "[FATAL] driverformer dir not staged"; ls -al; exit 3; }
 
   # ==== env ====
   export MPLBACKEND=Agg
@@ -100,7 +109,6 @@ env 'SEGLEN', SEGLEN_VAL
   export PYTHONPATH="$PWD:$PWD/driverformer${PYTHONPATH:+:$PYTHONPATH}"
   echo "[INFO] PYTHONPATH head = $(echo "$PYTHONPATH" | tr ':' '\n' | head -n 3)"
 
-
   # wheels link (optional)
   if [ -d "!{WHEELS_DIR}" ]; then
     [ "!{WHEELS_DIR}" = "wheels" ] || ln -snf "!{WHEELS_DIR}" wheels 2>/dev/null || cp -r "!{WHEELS_DIR}" wheels
@@ -109,29 +117,88 @@ env 'SEGLEN', SEGLEN_VAL
     echo "[INFO] no wheels directory staged"
   fi
 
-  # ==== pip install (SSL-safe) ====
-  PIP_OPTS="--no-cache-dir --retries 5 --timeout 60 \
-            --index-url https://pypi.org/simple \
-            --trusted-host pypi.org --trusted-host files.pythonhosted.org"
-  python -m pip install -U pip wheel setuptools $PIP_OPTS || true
-  # (핵심) solver 충돌 피하기 위해 미리 안정 버전 고정 설치
-  python -m pip install $PIP_OPTS \
-    'matplotlib==3.8.4' 'fonttools==4.53.1' 'kiwisolver==1.4.5' 'pillow>=10.2,<11' || true
+  # ----------------------------
+  # pip 설치: 온라인 감지 → 온라인/오프라인 루트로 분기
+  # ----------------------------
+  ONLINE=0
+  if ! ! { python - <<'PY'
+import socket, sys
+try:
+    with socket.create_connection(("pypi.org", 443), timeout=3):
+        pass
+    sys.exit(0)
+except Exception:
+    sys.exit(1)
+PY
+  }; then
+    ONLINE=1
+  fi
+  echo "[INFO] Network to PyPI: $([ $ONLINE -eq 1 ] && echo ONLINE || echo OFFLINE)"
 
+  # pip 공통 옵션(환경변수로 오버라이드 가능)
+  : "${PIP_INDEX_URL:=https://pypi.org/simple}"
+  : "${PIP_TRUSTED_HOST:=pypi.org files.pythonhosted.org}"
+  PIP_OPTS=( --no-cache-dir --retries 5 --timeout 90 --progress-bar off )
+  PIP_OPTS+=( --index-url "$PIP_INDEX_URL" )
+  for host in $PIP_TRUSTED_HOST; do PIP_OPTS+=( --trusted-host "$host" ); done
+  [ -n "${PIP_EXTRA_INDEX_URL:-}" ] && PIP_OPTS+=( --extra-index-url "$PIP_EXTRA_INDEX_URL" )
 
-  if [ -f "!{REQS}" ] && [ "$(basename "!{REQS}")" = "requirements.txt" ]; then
-    echo "[SETUP] Installing requirements.txt (filtered)"
-    grep -viE '^(torch|torchvision|torchaudio|pytorch-triton|triton|nvidia-|cuda|cudnn|cudatoolkit)' "!{REQS}" > .req_filtered.txt || true
-    [ -s .req_filtered.txt ] && python -m pip install $PIP_OPTS -r .req_filtered.txt || true
+  # sitecustomize: 공유전략 file_system로 (SHM 사용량 완화)
+  cat > sitecustomize.py <<'PY'
+try:
+    import torch, warnings
+    torch.multiprocessing.set_sharing_strategy('file_system')
+except Exception as e:
+    print("[WARN] set_sharing_strategy failed:", e)
+PY
+
+  # constraints(제약) 파일: solver 폭주 방지용 최소 버전 고정
+  cat > constraints.txt <<'REQ'
+matplotlib==3.8.4
+fonttools==4.53.1
+kiwisolver==1.4.5
+pillow>=10.2,<11
+REQ
+
+  SETUP_DEPS="!{params.setup_deps}"
+  if [ "$SETUP_DEPS" = "true" ]; then
+    echo "[SETUP] Installing Python runtime tools"
+    python -m pip install -U pip wheel setuptools "${PIP_OPTS[@]}" || true
+
+    if [ $ONLINE -eq 1 ]; then
+      echo "[SETUP] Online mode: installing base constraints"
+      # 제약 먼저 설치(충돌 완화)
+      python -m pip install "${PIP_OPTS[@]}" -c constraints.txt -r constraints.txt || true
+
+      if [ -f "!{REQS}" ] && [ "$(basename "!{REQS}")" = "requirements.txt" ]; then
+        echo "[SETUP] Installing requirements.txt (filtered, constrained)"
+        # CUDA/torch 등 무거운 항목 제외
+        grep -viE '^(torch|torchvision|torchaudio|pytorch[-]?triton|triton|nvidia-|cuda|cudnn|cudatoolkit|cupy|jax|jaxlib)' "!{REQS}" > .req_filtered.txt || true
+        if [ -s .req_filtered.txt ]; then
+          # 1차: 제약 기반 설치 시도
+          if ! python -m pip install "${PIP_OPTS[@]}" -c constraints.txt -r .req_filtered.txt; then
+            echo "[WARN] Online install failed, trying --use-deprecated=legacy-resolver once"
+            python -m pip install "${PIP_OPTS[@]}" -c constraints.txt -r .req_filtered.txt --use-deprecated=legacy-resolver || true
+          fi
+        else
+          echo "[INFO] .req_filtered.txt empty – skipping requirements"
+        fi
+      fi
+    fi
+
+    # wheels 오프라인 폴백(온라인 실패 or 오프라인)
+    if [ -d wheels ]; then
+      echo "[SETUP] Installing from local wheels (offline fallback)"
+      set +e
+      [ -f wheels/requirements_wheels.txt ] && python -m pip install --no-index --find-links wheels -r wheels/requirements_wheels.txt
+      ls wheels/*.whl >/dev/null 2>&1 && python -m pip install --no-index --find-links wheels wheels/*.whl
+      set -e
+    fi
+  else
+    echo "[SETUP] params.setup_deps=false → skipping pip installs"
   fi
 
-  if [ -d wheels ]; then
-    echo "[SETUP] Installing from local wheels (offline fallback)"; set +e
-    [ -f wheels/requirements_wheels.txt ] && python -m pip install --no-index --find-links wheels -r wheels/requirements_wheels.txt
-    ls wheels/*.whl >/dev/null 2>&1 && python -m pip install --no-index --find-links wheels wheels/*.whl
-    set -e
-  fi
-
+  # import self-check
   python - <<'PYINFO'
 import sys, importlib, traceback
 print("python =", sys.executable)
@@ -186,20 +253,15 @@ PYINFO
     --postsel-pi0-floor       '!{params.postsel_pi0_floor}'
     --postsel-pi0-ceil        '!{params.postsel_pi0_ceil}'
   )
-[ -n "$SEGLEN" ] && COMMON_ARGS+=( --segment-lengths $SEGLEN )
-
+  [ -n "$SEGLEN" ] && COMMON_ARGS+=( --segment-lengths $SEGLEN )
 
   FLAGS=()
   [ "!{params.use_mad}"      = "true" ] && FLAGS+=( --use-mad )
   [ "!{params.label_roll}"   = "true" ] && FLAGS+=( --label-roll )
   [ "!{params.run_pipeline}" = "true" ] && FLAGS+=( --run-pipeline )
 
-  # run: module preferred, fallback to staged script
   # ---- run: module preferred, fallback to staged script ----
-  python - <<'PY'
-import importlib.util, sys
-sys.exit(0 if importlib.util.find_spec("driverformer") else 1)
-PY
+  python - <<'PY'; import importlib.util, sys; sys.exit(0 if importlib.util.find_spec("driverformer") else 1); PY
   if [ $? -eq 0 ]; then
     echo "[RUN] python -m driverformer ..."
     set -x; python -u -m driverformer "${COMMON_ARGS[@]}" "${FLAGS[@]}"; set +x
