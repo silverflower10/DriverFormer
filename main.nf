@@ -89,6 +89,7 @@ process DRIVERFORMER_RUN {
   export OPENBLAS_NUM_THREADS=!{task.cpus}
   export NUMEXPR_NUM_THREADS=!{task.cpus}
   export PYTHONPATH="$PWD:$PWD/driverformer${PYTHONPATH:+:$PYTHONPATH}"
+  echo "[INFO] PYTHONPATH head:"; echo "$PYTHONPATH" | tr ':' '\n' | head -n 3
 
   # ---- wheels link (if exists) ----
   if [ -d "!{WHEELS_DIR}" ]; then
@@ -101,7 +102,7 @@ process DRIVERFORMER_RUN {
   # ===== pip install (SSL-safe) =====
   PIP_OPTS="--no-cache-dir --retries 5 --timeout 60 \
             --index-url https://pypi.org/simple \
-            --trusted-host piypi.org --trusted-host files.pythonhosted.org"
+            --trusted-host pypi.org --trusted-host files.pythonhosted.org"
   python -m pip install -U pip wheel setuptools $PIP_OPTS || true
 
   # requirements.txt (filtered)
@@ -120,6 +121,19 @@ process DRIVERFORMER_RUN {
     ls wheels/*.whl >/dev/null 2>&1 && python -m pip install --no-index --find-links wheels wheels/*.whl || true
   fi
 
+  # auto top-up
+  MISSING=$(python - <<'PY'
+mods = ["pandas","pyarrow","scikit-learn","tqdm","pyyaml","matplotlib",
+        "statsmodels","patsy","rotary_embedding_torch","einops"]
+import importlib.util
+print(" ".join([m for m in mods if not importlib.util.find_spec(m)]))
+PY
+)
+  if [ -n "$MISSING" ]; then
+    echo "[SETUP] Installing missing packages: $MISSING"
+    python -m pip install $PIP_OPTS $MISSING || echo "[WARN] missing packages install failed"
+  fi
+
   which python || true
   python - <<'PYINFO'
 import sys, importlib, traceback
@@ -132,71 +146,66 @@ except Exception:
     print("driverformer import: FAIL — traceback:"); traceback.print_exc()
 PYINFO
 
-  # ---- COMMON_ARGS as bash array (no backslash-newlines) ----
-  COMMON_ARGS=(
-    --cls-file            '!{CLS}'
-    --feat-file           '!{FEAT}'
-    --mutations-file      '!{MUTS}'
-    --out-dir             '!{params.out_dir}'
-    --lr                  !{params.lr}
-    --batch-size          !{params.batch_size}
-    --epochs              !{params.epochs}
-    --seed                !{params.seed}
-    --d-model             !{params.d_model}
-    --nhead               !{params.nhead}
-    --num-layers          !{params.num_layers}
-    --dim-feedforward     !{params.dim_feedforward}
-    --dropout             !{params.dropout}
-    --max-seq-len         !{params.max_seq_len}
-    --overlap-factor      !{params.overlap_factor}
-    --huber-factor        !{params.huber_factor}
-    --cutmix-p            !{params.cutmix_p}
-    --num-data-workers    !{params.num_data_workers}
-    --torch-threads       !{params.torch_threads}
-    --len-alpha           !{params.len_alpha}
-    --res-beta            !{params.res_beta}
-    --label-roll-width    !{params.label_roll_width}
-    --pipeline-out-dir        '!{params.pipeline_out_dir}'
-    --pipeline-chunk-size     !{params.pipeline_chunk_size}
-    --pipeline-chunk-overlap  !{params.pipeline_chunk_overlap}
-    --pipeline-min-distance   !{params.pipeline_min_distance}
-    --pipeline-max-distance   !{params.pipeline_max_distance}
-    --pipeline-sample-frac    !{params.pipeline_sample_frac}
-    --pipeline-gmm-k          !{params.pipeline_gmm_k}
-    --pipeline-beta           !{params.pipeline_beta}
-    --pipeline-gamma          !{params.pipeline_gamma}
-    --pipeline-seed           !{params.pipeline_seed}
-    --pipeline-dp-gap-bp      !{params.pipeline_dp_gap_bp}
-    --postsel-fdr-method      '!{params.postsel_fdr_method}'
-    --postsel-bootstrap       !{params.postsel_bootstrap}
-    --postsel-lambda-start    '!{params.postsel_lambda_start}'
-    --postsel-lambda-end      '!{params.postsel_lambda_end}'
-    --postsel-lambda-step     '!{params.postsel_lambda_step}'
-    --postsel-pi0-floor       '!{params.postsel_pi0_floor}'
-    --postsel-pi0-ceil        '!{params.postsel_pi0_ceil}'
-  )
+  # ---- COMMON_ARGS (parser-safe; no segment-lengths yet) ----
+  COMMON_ARGS="\
+    --cls-file            '!{CLS}' \
+    --feat-file           '!{FEAT}' \
+    --mutations-file      '!{MUTS}' \
+    --out-dir             '!{params.out_dir}' \
+    --lr                  !{params.lr} \
+    --batch-size          !{params.batch_size} \
+    --epochs              !{params.epochs} \
+    --seed                !{params.seed} \
+    --d-model             !{params.d_model} \
+    --nhead               !{params.nhead} \
+    --num-layers          !{params.num_layers} \
+    --dim-feedforward     !{params.dim_feedforward} \
+    --dropout             !{params.dropout} \
+    --max-seq-len         !{params.max_seq_len} \
+    --overlap-factor      !{params.overlap_factor} \
+    --huber-factor        !{params.huber_factor} \
+    --cutmix-p            !{params.cutmix_p} \
+    --num-data-workers    !{params.num_data_workers} \
+    --torch-threads       !{params.torch_threads} \
+    --len-alpha           !{params.len_alpha} \
+    --res-beta            !{params.res_beta} \
+    --label-roll-width    !{params.label_roll_width} \
+    --pipeline-out-dir         '!{params.pipeline_out_dir}' \
+    --pipeline-chunk-size      !{params.pipeline_chunk_size} \
+    --pipeline-chunk-overlap   !{params.pipeline_chunk_overlap} \
+    --pipeline-min-distance    !{params.pipeline_min_distance} \
+    --pipeline-max-distance    !{params.pipeline_max_distance} \
+    --pipeline-sample-frac     !{params.pipeline_sample_frac} \
+    --pipeline-gmm-k           !{params.pipeline_gmm_k} \
+    --pipeline-beta            !{params.pipeline_beta} \
+    --pipeline-gamma          !{params.pipeline_gamma} \
+    --pipeline-seed            !{params.pipeline_seed} \
+    --pipeline-dp-gap-bp       !{params.pipeline_dp_gap_bp} \
+    --postsel-fdr-method       '!{params.postsel_fdr_method}' \
+    --postsel-bootstrap        !{params.postsel_bootstrap} \
+    --postsel-lambda-start     !{params.postsel_lambda_start} \
+    --postsel-lambda-end       !{params.postsel_lambda_end} \
+    --postsel-lambda-step      !{params.postsel_lambda_step} \
+    --postsel-pi0-floor        !{params.postsel_pi0_floor} \
+    --postsel-pi0-ceil         !{params.postsel_pi0_ceil}'"
 
-  # segment-lengths append (if any)
+  # --- robust segment_lengths handling (value exists → add) ---
   _raw_seglen="!{ (params.segment_lengths instanceof List) ? params.segment_lengths.join(' ') : (params.segment_lengths ? params.segment_lengths.toString() : '') }"
-  SEGLEN=$(echo "$_raw_seglen" | tr ',' ' ' | sed -e 's/^ *//; s/ *$//' -e 's/  \+/ /g' -e 's/^\"//; s/\"$//')
-  if [ -n "$SEGLEN" ]; then
-    COMMON_ARGS+=( --segment-lengths $SEGLEN )
-  fi
+  SEGLEN=$(echo "$_raw_seglen" | tr ',' ' ' | sed -e 's/^ *//; s/ *$//' -e 's/  \+/ /g' -e 's/^"//; s/"$//')
+  [ -n "$SEGLEN" ] && COMMON_ARGS="$COMMON_ARGS --segment-lengths $SEGLEN"
 
-  # flags
-  FLAGS=()
-  [ "!{params.use_mad}"      = "true" ] && FLAGS+=( --use-mad )
-  [ "!{params.label_roll}"   = "true" ] && FLAGS+=( --label-roll )
-  [ "!{params.run_pipeline}" = "true" ] && FLAGS+=( --run-pipeline )
+  FLAGS=""
+  [ "!{params.use_mad}"      = "true" ] && FLAGS="${FLAGS} --use-mad"
+  [ "!{params.label_roll}"   = "true" ] && FLAGS="${FLAGS} --label-roll"
+  [ "!{params.run_pipeline}" = "true" ] && FLAGS="${FLAGS} --run-pipeline"
 
-  # run
   if python - <<<'import importlib.util as u; print(1 if u.find_spec("driverformer") else 0)'; then
     echo "[RUN] python -m driverformer ..."
-    set -x; python -u -m driverformer "${COMMON_ARGS[@]}" "${FLAGS[@]}"; set +x
+    set -x; python -u -m driverformer ${COMMON_ARGS} ${FLAGS}; set +x
   else
     if [ -f "trainDriverFormer.py" ]; then
       echo "[RUN] python trainDriverFormer.py ..."
-      set -x; python -u trainDriverFormer.py "${COMMON_ARGS[@]}" "${FLAGS[@]}"; set +x
+      set -x; python -u trainDriverFormer.py ${COMMON_ARGS} ${FLAGS}; set +x
     else
       echo "[ERROR] Neither 'driverformer' package nor 'trainDriverFormer.py' staged."
       exit 2
