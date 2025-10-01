@@ -59,25 +59,25 @@ process DRIVERFORMER_RUN {
   publishDir "${params.out_dir}", mode: 'copy', overwrite: true
   label 'gpu'        // ← config의 withLabel: gpu { accelerator 1 } 적용
 
-  // ⬇ 리스트/문자열 모두 "10 50 100" 형태로 정규화
-  def SEGLEN = (
-    params.segment_lengths instanceof List
-      ? params.segment_lengths.join(' ')
-      : (params.segment_lengths ?: '')
-  ).toString().trim().replaceAll(',', ' ').replaceAll(/\s+/, ' ')
-
   input:
     path CLS
     path FEAT
     path MUTS
-    path DF_PKG            // driverformer/ or any dir
-    path TRAIN_PY          // trainDriverFormer.py (any path)
+    path DF_PKG    stageAs: 'driverformer'          // ← 이름 고정
+    path TRAIN_PY  stageAs: 'trainDriverFormer.py'  // ← 이름 고정
     path REQS
     path WHEELS_DIR
 
   output:
     path "stdout.txt"
     path "stderr.txt"
+
+  env SEGLEN : (
+    (params.segment_lengths instanceof List
+      ? params.segment_lengths.join(' ')
+      : (params.segment_lengths ?: '')
+    ).toString().trim().replaceAll(',', ' ').replaceAll(/\s+/, ' ')
+  )
 
   shell:
   '''
@@ -88,15 +88,8 @@ process DRIVERFORMER_RUN {
   ls -al | sed 's/^/  /' || true
 
   # ==== stage paths to predictable names ====
-  if [ -d "!{DF_PKG}" ]; then
-    base="$(basename "!{DF_PKG}")"
-    [ "$base" = "driverformer" ] || ln -snf "!{DF_PKG}" driverformer
-    export PYTHONPATH="!{DF_PKG}:${PYTHONPATH:-}"
-  fi
-  if [ -f "!{TRAIN_PY}" ]; then
-    ln -snf "!{TRAIN_PY}" trainDriverFormer.py || true
-  fi
   echo "[INFO] driverformer/:"; ls -al driverformer | sed 's/^/  /' || true
+[ -d driverformer ] || { echo "[FATAL] driverformer dir not staged"; ls -al; exit 3; }
 
   # ==== env ====
   export MPLBACKEND=Agg
@@ -107,6 +100,10 @@ process DRIVERFORMER_RUN {
   export NUMEXPR_NUM_THREADS=!{task.cpus}
   export PYTHONPATH="$PWD:$PWD/driverformer${PYTHONPATH:+:$PYTHONPATH}"
   echo "[INFO] PYTHONPATH head = $(echo "$PYTHONPATH" | tr ':' '\n' | head -n 3)"
+
+  # 모듈 인식이 흔들릴 경우 폴백: 편집형 설치(빠르고 안전)
+  python -m pip install -e ./driverformer || true
+
 
   # wheels link (optional)
   if [ -d "!{WHEELS_DIR}" ]; then
@@ -189,7 +186,7 @@ PYINFO
     --postsel-pi0-floor       '!{params.postsel_pi0_floor}'
     --postsel-pi0-ceil        '!{params.postsel_pi0_ceil}'
   )
-  [ -n "!{SEGLEN}" ] && COMMON_ARGS+=( --segment-lengths !{SEGLEN} )
+  [ -n "$SEGLEN" ] && COMMON_ARGS+=( --segment-lengths $SEGLEN )
 
   FLAGS=()
   [ "!{params.use_mad}"      = "true" ] && FLAGS+=( --use-mad )
@@ -197,12 +194,19 @@ PYINFO
   [ "!{params.run_pipeline}" = "true" ] && FLAGS+=( --run-pipeline )
 
   # run: module preferred, fallback to staged script
-  if python - <<<'import importlib.util as u; print(1 if u.find_spec("driverformer") else 0)'; then
+  # ---- run: module preferred, fallback to staged script ----
+  python - <<'PY'
+import importlib.util, sys
+sys.exit(0 if importlib.util.find_spec("driverformer") else 1)
+PY
+  if [ $? -eq 0 ]; then
+    echo "[RUN] python -m driverformer ..."
     set -x; python -u -m driverformer "${COMMON_ARGS[@]}" "${FLAGS[@]}"; set +x
-  elif [ -f "!{TRAIN_PY}" ]; then
-    set -x; python -u "!{TRAIN_PY}" "${COMMON_ARGS[@]}" "${FLAGS[@]}"; set +x
+  elif [ -f "trainDriverFormer.py" ]; then
+    echo "[RUN] python trainDriverFormer.py ..."
+    set -x; python -u "trainDriverFormer.py" "${COMMON_ARGS[@]}" "${FLAGS[@]}"; set +x
   else
-    echo "[ERROR] Neither 'driverformer' package nor '!{TRAIN_PY}' staged."
+    echo "[ERROR] Neither 'driverformer' package nor 'trainDriverFormer.py' staged."
     exit 2
   fi
 
