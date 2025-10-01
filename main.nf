@@ -9,7 +9,7 @@ params.out_dir         = params.out_dir         ?: 'results/run'
 
 // training/pipeline defaults (괄호 제거)
 params.lr              = params.lr              ?: 2e-4
-params.batch_size      = params.batch_size      ?: 32
+params.batch_size      = params.batch_size      ?: 128
 params.epochs          = params.epochs          ?: 2
 params.seed            = params.seed            ?: 42
 params.d_model         = params.d_model         ?: 768
@@ -117,10 +117,6 @@ env 'SEGLEN', SEGLEN_VAL
             --index-url https://pypi.org/simple \
             --trusted-host pypi.org --trusted-host files.pythonhosted.org"
   python -m pip install -U pip wheel setuptools $PIP_OPTS || true
-  # (핵심) solver 충돌 피하기 위해 미리 안정 버전 고정 설치
-  python -m pip install $PIP_OPTS \
-    'matplotlib==3.8.4' 'fonttools==4.53.1' 'kiwisolver==1.4.5' 'pillow>=10.2,<11' || true
-
 
   if [ -f "!{REQS}" ] && [ "$(basename "!{REQS}")" = "requirements.txt" ]; then
     echo "[SETUP] Installing requirements.txt (filtered)"
