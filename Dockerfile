@@ -1,46 +1,38 @@
-# Dockerfile (Python 3.12 + PyTorch 2.4.0 cu121, use local cp312 wheels)
-FROM python:3.12-slim
+FROM pytorch/pytorch:2.4.0-cuda12.1-cudnn9-runtime
 
 ARG DEBIAN_FRONTEND=noninteractive
 
-# 런타임에 자주 필요한 라이브러리(이미지/GUI 백엔드 등)
-# libgl1, libglib2.0-0: matplotlib/pillow에서 필요할 수 있음
+# 필수 최소 패키지
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates curl \
-      libgl1 libglib2.0-0 \
-    && rm -rf /var/lib/apt/lists/*
+      ca-certificates \
+   && rm -rf /var/lib/apt/lists/*
 
-# PyTorch 2.4.0 (CUDA 12.1) 설치
-# 참고: https://pytorch.org/get-started/previous-versions/
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
-    pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu121 \
-        torch==2.4.0 torchvision==0.19.0 torchaudio==2.4.0
-
-# 작업 디렉토리
 WORKDIR /opt/driverformer
 
-# 리포(코드 + wheels/)를 그대로 복사
-#  - 반드시 리포 루트에 wheels/*.whl 들이 들어있어야 함 (cp312)
+# ⚠️ 리포 내용(코드 + wheels/)을 그대로 이미지에 복사
+#    → git clone 대신 COPY . 를 쓰는 이유가 바로 wheels를 넣기 위함
 COPY . /opt/driverformer/repo
 
-# 로컬 wheels만 설치 (PyPI 접속 없이)
-#  - cp312 wheel이어야 설치 성공 (컨테이너 Python이 3.12)
-RUN if ls repo/wheels/*.whl >/dev/null 2>&1; then \
-      echo "[INFO] Installing local wheels (no-index)"; \
-      pip install --no-cache-dir --no-index --find-links=repo/wheels repo/wheels/*.whl; \
+# 파이썬 기본 도구
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+
+# 1) 로컬 wheels만으로 설치(가능하면 PyPI 접속 없이)
+RUN if [ -d repo/wheels ] && ls repo/wheels/*.whl >/dev/null 2>&1; then \
+      echo "[INFO] Installing local wheels..."; \
+      pip install --no-cache-dir --no-index --find-links=repo/wheels repo/wheels/*.whl ; \
     else \
-      echo "[WARN] No wheels found under repo/wheels; skipping local wheel install"; \
+      echo "[WARN] No wheels found under repo/wheels"; \
     fi
 
-# (선택) 남은 의존성 보충이 필요하면 주석 해제 (가능하면 안 쓰는 걸 권장)
+# 2) (선택) 남은 의존성 보충 – 필요할 때만 주석 해제
 # RUN if [ -f repo/requirements.txt ]; then \
-#       pip install --no-cache-dir -r repo/requirements.txt; \
+#       pip install --no-cache-dir -r repo/requirements.txt ; \
 #     fi
 
-# 파이썬 모듈 경로
+# 드라이버포머 모듈 import 경로
 ENV PYTHONPATH=/opt/driverformer/repo:${PYTHONPATH}
 
-# 실행 스크립트: 환경변수로 파라미터 받음
+# 실행 스크립트(컨테이너 내부 경로 고정)
 COPY <<'BASH' /opt/driverformer/run.sh
 #!/usr/bin/env bash
 set -euo pipefail
@@ -71,7 +63,7 @@ cmd=( python -u -m driverformer
   --lr "${LR}" --batch-size "${BATCH_SIZE}" --epochs "${EPOCHS}" --seed "${SEED}"
   --d-model "${D_MODEL}" --nhead "${NHEAD}" --num-layers "${NUM_LAYERS}" --dim-feedforward "${DIM_FEEDFORWARD}"
   --dropout "${DROPOUT}" --max-seq-len "${MAX_SEQ_LEN}" --overlap-factor "${OVERLAP_FACTOR}"
-  --huber-factor "${HUBER_FACTOR}" --cutm ix-p "${CUTMIX_P}" --num-data-workers "${NUM_DATA_WORKERS}"
+  --huber-factor "${HUBER_FACTOR}" --cutmix-p "${CUTMIX_P}" --num-data-workers "${NUM_DATA_WORKERS}"
   --torch-threads "${TORCH_THREADS}" --len-alpha "${LEN_ALPHA}" --res-beta "${RES_BETA}" )
 
 [ -n "${MUTATIONS_FILE}" ] && cmd+=( --mutations-file "${MUTATIONS_FILE}" )
