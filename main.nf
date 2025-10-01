@@ -1,16 +1,13 @@
-// main.nf — install (venv via requirements/wheels) + run; no triple quotes; no optional(true)
+// main.nf — no triple quotes; direct run with script:+strings (no external sh)
 nextflow.enable.dsl = 2
 
-// ---- Params ----
+// minimal params
 params.cls_file        = params.cls_file        ?: null
 params.feat_file       = params.feat_file       ?: null
 params.mutations_file  = params.mutations_file  ?: null
 params.out_dir         = params.out_dir         ?: 'results/run'
 
-// 설치 단계 on/off (기본: true)
-params.setup_deps      = (params.setup_deps in [false,'false',0,'0']) ? false : true
-
-// 학습/파이프라인 주요 파라미터
+// training/pipeline (필요한 것만 남김 — 나머지는 원하면 추가)
 params.lr              = (params.lr ?: 2e-4)
 params.batch_size      = (params.batch_size ?: 128)
 params.epochs          = (params.epochs ?: 20)
@@ -53,113 +50,56 @@ params.postsel_lambda_step   = (params.postsel_lambda_step   ?: 0.01)
 params.postsel_pi0_floor     = (params.postsel_pi0_floor     ?: 0.01)
 params.postsel_pi0_ceil      = (params.postsel_pi0_ceil      ?: 1.0)
 
-// ===== 1) 설치(venv) =====
-process SETUP_DEPS {
-  cpus 1; memory '4 GB'; time '2h'
-  publishDir "${params.out_dir}", mode: 'copy', overwrite: true
-
-  input:
-    path REQS        // requirements.txt 또는 더미
-    path WHEELS_DIR  // wheels/ 디렉토리 또는 더미
-
-  output:
-    path "venv", emit: VENV
-
-  // 한 줄 script (triple quotes 없음)
-  script:
-    "python -m venv venv && " +
-    ". venv/bin/activate && " +
-    "python -m pip install -U pip wheel setuptools --no-cache-dir && " +
-    // requirements.txt 있으면 설치
-    "[ -f '!{REQS}' ] && [ \"$(basename '!{REQS}')\" = 'requirements.txt' ] && python -m pip install -r '!{REQS}' --no-cache-dir || true && " +
-    // wheels 폴더 있으면 오프라인 설치
-    "[ -d '!{WHEELS_DIR}' ] && python -m pip install --no-index --find-links '!{WHEELS_DIR}' '!{WHEELS_DIR}'/*.whl || true"
-}
-
-// ===== 2) 실행 =====
 process DRIVERFORMER_RUN {
   cpus 8; memory '32 GB'; time '72h'
   publishDir "${params.out_dir}", mode: 'copy', overwrite: true
 
   input:
-    path CLS
-    path FEAT
-    path MUTS
-    path VENV   // venv 또는 더미(항상 전달)
+    path CLS; path FEAT; path MUTS
 
   output:
-    path "stdout.txt"
-    path "stderr.txt"
+    path "stdout.txt"; path "stderr.txt"
 
-  // script 블록: Groovy로 한 줄 명령 구성(삼중따옴표/!{} 없음)
+  // NO triple quotes — just concatenated strings
   script:
-  {
-    // segment_lengths 정규화 (리스트/문자열 → 공백/숫자만)
-    def segRaw  = params.segment_lengths ? (params.segment_lengths instanceof List ? params.segment_lengths.join(' ') : params.segment_lengths.toString()) : ''
-    def segNorm = segRaw.replace(',', ' ').trim().replaceAll(/\s+/, ' ').replaceAll(/^\"|\"$/, '')
-    def segNums = segNorm ? segNorm.split(/\s+/).findAll{ it ==~ /\d+/ }.join(' ') : ''
-    def segOpt  = segNums ? "--segment-lengths ${segNums} " : ""
-
+    "python -u -m driverformer " +
+    "--cls-file '!{CLS}' " +
+    "--feat-file '!{FEAT}' " +
+    "--mutations-file '!{MUTS}' " +
+    "--out-dir '!{params.out_dir}' " +
+    "--lr !{params.lr} --batch-size !{params.batch_size} --epochs !{params.epochs} --seed !{params.seed} " +
+    "--d-model !{params.d_model} --nhead !{params.nhead} --num-layers !{params.num_layers} " +
+    "--dim-feedforward !{params.dim_feedforward} --dropout !{params.dropout} --max-seq-len !{params.max_seq_len} " +
+    "--overlap-factor !{params.overlap_factor} --huber-factor !{params.huber_factor} --cutmix-p !{params.cutmix_p} " +
+    "--num-data-workers !{params.num_data_workers} --torch-threads !{params.torch_threads} " +
+    "--len-alpha !{params.len_alpha} --res-beta !{params.res_beta} --label-roll-width !{params.label_roll_width} " +
+    "--pipeline-out-dir '!{params.pipeline_out_dir}' --pipeline-chunk-size !{params.pipeline_chunk_size} " +
+    "--pipeline-chunk-overlap !{params.pipeline_chunk_overlap} --pipeline-min-distance !{params.pipeline_min_distance} " +
+    "--pipeline-max-distance !{params.pipeline_max_distance} --pipeline-sample-frac !{params.pipeline_sample_frac} " +
+    "--pipeline-gmm-k !{params.pipeline_gmm_k} --pipeline-beta !{params.pipeline_beta} --pipeline-gamma !{params.pipeline_gamma} " +
+    "--pipeline-seed !{params.pipeline_seed} --pipeline-dp-gap-bp !{params.pipeline_dp_gap_bp} " +
+    "--postsel-fdr-method '!{params.postsel_fdr_method}' --postsel-bootstrap !{params.postsel_bootstrap} " +
+    "--postsel-lambda-start '!{params.postsel_lambda_start}' --postsel-lambda-end '!{params.postsel_lambda_end}' " +
+    "--postsel-lambda-step '!{params.postsel_lambda_step}' --postsel-pi0-floor '!{params.postsel_pi0_floor}' --postsel-pi0-ceil '!{params.postsel_pi0_ceil}' " +
+    // ← segment_lengths 조건부(값 없으면 빈 문자열)
+    "!{ (params.segment_lengths ? \"--segment-lengths \" + ((params.segment_lengths instanceof List) ? params.segment_lengths.join(' ') : params.segment_lengths.toString()) : '') } " +
     // 플래그
-    def flags = ''
-    if (params.use_mad)      flags += '--use-mad '
-    if (params.label_roll)   flags += '--label-roll '
-    if (params.run_pipeline) flags += '--run-pipeline '
-
-    // venv 활성화(디렉토리인 경우에만)
-    def venvAct = "[ -d '!{VENV}' ] && . '!{VENV}/bin/activate' || true; "
-
-    // 실행 커맨드
-    def cmd =
-      venvAct +
-      "python -u -m driverformer " +
-      "--cls-file ${CLS} --feat-file ${FEAT} --mutations-file ${MUTS} " +
-      "--out-dir ${params.out_dir} " +
-      "--lr ${params.lr} --batch-size ${params.batch_size} --epochs ${params.epochs} --seed ${params.seed} " +
-      "--d-model ${params.d_model} --nhead ${params.nhead} --num-layers ${params.num_layers} " +
-      "--dim-feedforward ${params.dim_feedforward} --dropout ${params.dropout} --max-seq-len ${params.max_seq_len} " +
-      "--overlap-factor ${params.overlap_factor} --huber-factor ${params.huber_factor} --cutmix-p ${params.cutmix_p} " +
-      "--num-data-workers ${params.num_data_workers} --torch-threads ${params.torch_threads} " +
-      "--len-alpha ${params.len_alpha} --res-beta ${params.res_beta} --label-roll-width ${params.label_roll_width} " +
-      "--pipeline-out-dir ${params.pipeline_out_dir} --pipeline-chunk-size ${params.pipeline_chunk_size} " +
-      "--pipeline-chunk-overlap ${params.pipeline_chunk_overlap} --pipeline-min-distance ${params.pipeline_min_distance} " +
-      "--pipeline-max-distance ${params.pipeline_max_distance} --pipeline-sample-frac ${params.pipeline_sample_frac} " +
-      "--pipeline-gmm-k ${params.pipeline_gmm_k} --pipeline-beta ${params.pipeline_beta} --pipeline-gamma ${params.pipeline_gamma} " +
-      "--pipeline-seed ${params.pipeline_seed} --pipeline-dp-gap-bp ${params.pipeline_dp_gap_bp} " +
-      "--postsel-fdr-method ${params.postsel_fdr_method} --postsel-bootstrap ${params.postsel_bootstrap} " +
-      "--postsel-lambda-start ${params.postsel_lambda_start} --postsel-lambda-end ${params.postsel_lambda_end} " +
-      "--postsel-lambda-step ${params.postsel_lambda_step} --postsel-pi0-floor ${params.postsel_pi0_floor} --postsel-pi0-ceil ${params.postsel_pi0_ceil} " +
-      segOpt + flags +
-      "1>stdout.txt 2>stderr.txt"
-
-    return cmd
-  }
+    "!{ params.use_mad      ? '--use-mad '      : '' }" +
+    "!{ params.label_roll   ? '--label-roll '   : '' }" +
+    "!{ params.run_pipeline ? '--run-pipeline ' : '' }" +
+    // 표준출력/오류 저장
+    " 1>stdout.txt 2>stderr.txt"
 }
 
-// ===== 워크플로 =====
+// ---- Workflow ----
 workflow {
   if( !params.cls_file )       error "Missing required param: --cls_file"
   if( !params.feat_file )      error "Missing required param: --feat_file"
   if( !params.mutations_file ) error "Missing required param: --mutations_file"
 
-  // 데이터
   ch_cls  = Channel.fromPath(params.cls_file)
   ch_feat = Channel.fromPath(params.feat_file)
   ch_muts = Channel.fromPath(params.mutations_file)
 
-  // requirements & wheels 채널 (없으면 더미)
-  ch_reqs_exist = Channel.fromPath("${projectDir}/requirements.txt", checkIfExists: true)
-  ch_dummy      = Channel.fromPath("${projectDir}/driverformer/__init__.py", checkIfExists: true)
-  ch_reqs   = ch_reqs_exist.ifEmpty(ch_dummy)
-
-  ch_wheels_exist = Channel.fromPath("${projectDir}/wheels", checkIfExists: true)
-  ch_wheels = ch_wheels_exist.ifEmpty(ch_dummy)
-
-  if (params.setup_deps) {
-    SETUP_DEPS(ch_reqs, ch_wheels)
-    DRIVERFORMER_RUN(ch_cls, ch_feat, ch_muts, SETUP_DEPS.out.VENV)
-  } else {
-    // 설치 off: 더미를 VENV 자리에 넣어 입력 항상 만족 (optional 사용 안 함)
-    DRIVERFORMER_RUN(ch_cls, ch_feat, ch_muts, ch_dummy)
-  }
+  DRIVERFORMER_RUN(ch_cls, ch_feat, ch_muts)
 }
