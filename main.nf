@@ -1,4 +1,4 @@
-// main.nf — DriverFormer minimal wrapper (DSL2)
+// main.nf — DriverFormer (DSL2, CloudOS-ready, tuple inputs, no multiline quotes)
 nextflow.enable.dsl = 2
 
 // ── 필수 입력 ──
@@ -58,15 +58,26 @@ params.cpus     = params.cpus     ?: 8
 params.memory   = params.memory   ?: '64 GB'
 params.time     = params.time     ?: '24h'
 
-// (컨테이너는 config에서 다이제스트로 고정하므로 여기선 기본값을 두지 않음)
+// (컨테이너는 nextflow.config의 cloudos 프로필에서 다이제스트로 고정됨)
 
 workflow {
-  if( !params.cls_file || !params.feat_file || !params.mutations_file ){
-    log.error "Required: --cls_file, --feat_file, --mutations_file"
+  // 프로필/컨테이너/필수 파라미터 진단(원인 추적용)
+  log.info "active_profile = ${workflow.profile}"
+  log.info "params.cls_file=${params.cls_file}"
+  log.info "params.feat_file=${params.feat_file}"
+  log.info "params.mutations_file=${params.mutations_file}"
+
+  // 필수 3개 가드
+  def missing = []
+  if( !params.cls_file )        missing << 'cls_file'
+  if( !params.feat_file )       missing << 'feat_file'
+  if( !params.mutations_file )  missing << 'mutations_file'
+  if( missing ) {
+    log.error "Missing params: ${missing.join(', ')}"
     System.exit(1)
   }
 
-  // ⬇⬇⬇ 세 파일을 한 번에 넘기는 튜플 채널
+  // 세 파일을 한 번에 넘기는 튜플 채널
   Channel.of( tuple( file(params.cls_file), file(params.feat_file), file(params.mutations_file) ) ) \
     | TRAIN_DRIVERFORMER
 }
@@ -78,11 +89,11 @@ process TRAIN_DRIVERFORMER {
   memory params.memory
   time   params.time
 
-  // CloudOS/Docker에서 config의 process.container가 적용됨
-  label 'gpu'                    // ← config의 withLabel: gpu { accelerator 1 }가 매핑됨
+  // config의 withLabel: gpu { accelerator N } 적용
+  label 'gpu'
   publishDir params.out_dir, mode: 'copy'
 
-  // 멀티라인 회피: process.env 사용
+  // 환경변수(멀티라인 회피)
   env PYTHONPATH             : (System.getenv('PYTHONPATH') ?: '.') + ":$PWD"
   env OMP_NUM_THREADS        : params.torch_threads.toString()
   env MKL_NUM_THREADS        : params.torch_threads.toString()
@@ -92,7 +103,7 @@ process TRAIN_DRIVERFORMER {
   env TOKENIZERS_PARALLELISM : 'false'
 
   input:
-  tuple path cls_file, path feat_file, path mut_file   // ← tuple 입력으로 변경
+  tuple path cls_file, path feat_file, path mut_file
 
   output:
   path "${params.out_dir}"
