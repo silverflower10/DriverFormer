@@ -72,12 +72,14 @@ process DRIVERFORMER_RUN {
     path "stdout.txt"
     path "stderr.txt"
 
-  env SEGLEN : (
-    (params.segment_lengths instanceof List
-      ? params.segment_lengths.join(' ')
-      : (params.segment_lengths ?: '')
-    ).toString().trim().replaceAll(',', ' ').replaceAll(/\s+/, ' ')
-  )
+  env {
+    SEGLEN = (
+      (params.segment_lengths instanceof List
+        ? params.segment_lengths.join(' ')
+        : (params.segment_lengths ?: '')
+      ).toString().trim().replaceAll(',', ' ').replaceAll(/\s+/, ' ')
+    )
+  }
 
   shell:
   '''
