@@ -1,187 +1,158 @@
-// main.nf — DriverFormer minimal wrapper (DSL2)
+// main.nf — install (venv via requirements/wheels) + run; no triple quotes; no optional(true)
 nextflow.enable.dsl = 2
 
-// ── 필수 입력 ──
+// ---- Params ----
 params.cls_file        = params.cls_file        ?: null
 params.feat_file       = params.feat_file       ?: null
 params.mutations_file  = params.mutations_file  ?: null
 params.out_dir         = params.out_dir         ?: 'results/run'
+params.setup_deps      = (params.setup_deps in [false,'false',0,'0']) ? false : true
 
-// ── 하이퍼파라미터 기본값 ──
-params.lr              = params.lr              ?: 2e-4
-params.batch_size      = params.batch_size      ?: 32
-params.epochs          = params.epochs          ?: 20
-params.seed            = params.seed            ?: 42
-params.d_model         = params.d_model         ?: 768
-params.nhead           = params.nhead           ?: 8
-params.num_layers      = params.num_layers      ?: 6
-params.dim_feedforward = params.dim_feedforward ?: 3072
-params.dropout         = params.dropout         ?: 0.2
-params.max_seq_len     = params.max_seq_len     ?: 1024
-params.segment_lengths = params.segment_lengths ?: ('10 50 100')
-params.overlap_factor  = params.overlap_factor  ?: 0.3
-params.use_mad         = (params.use_mad in [true,'true',1,'1'])
-params.huber_factor    = params.huber_factor    ?: 3.0
-params.cutmix_p        = params.cutmix_p        ?: 0.2
-params.num_data_workers= params.num_data_workers?: 2
-params.torch_threads   = params.torch_threads   ?: 2
-params.len_alpha       = params.len_alpha       ?: 0.5
-params.res_beta        = params.res_beta        ?: 0.5
-params.label_roll      = (params.label_roll in [true,'true',1,'1'])
-params.label_roll_width= params.label_roll_width?: 2
+// Train/Pipeline key params
+params.lr              = (params.lr ?: 2e-4)
+params.batch_size      = (params.batch_size ?: 128)
+params.epochs          = (params.epochs ?: 20)
+params.seed            = (params.seed ?: 42)
+params.d_model         = (params.d_model ?: 768)
+params.nhead           = (params.nhead  ?: 8)
+params.num_layers      = (params.num_layers ?: 6)
+params.dim_feedforward = (params.dim_feedforward ?: 3072)
+params.dropout         = (params.dropout ?: 0.2)
+params.max_seq_len     = (params.max_seq_len ?: 1024)
+params.segment_lengths = (params.segment_lengths ?: [10,50,100])
+params.overlap_factor  = (params.overlap_factor ?: 0.3)
+params.use_mad         = (params.use_mad ?: true)
+params.huber_factor    = (params.huber_factor ?: 3.0)
+params.cutmix_p        = (params.cutmix_p ?: 0.2)
+params.num_data_workers= (params.num_data_workers ?: 8)
+params.torch_threads   = (params.torch_threads ?: 8)
+params.len_alpha       = (params.len_alpha ?: 0.5)
+params.res_beta        = (params.res_beta  ?: 0.5)
+params.label_roll      = (params.label_roll ?: true)
+params.label_roll_width= (params.label_roll_width ?: 2)
 
-// ── 파이프라인/포스트선택 ──
-params.run_pipeline           = (params.run_pipeline in [true,'true',1,'1'])
-params.pipeline_out_dir       = params.pipeline_out_dir       ?: "${params.out_dir}/postproc_k_auto"
-params.pipeline_chunk_size    = params.pipeline_chunk_size    ?: 1_000_000
-params.pipeline_chunk_overlap = params.pipeline_chunk_overlap ?: 100_000
-params.pipeline_min_distance  = params.pipeline_min_distance  ?: 0
-params.pipeline_max_distance  = params.pipeline_max_distance  ?: 100_000
-params.pipeline_sample_frac   = params.pipeline_sample_frac   ?: 0.01
-params.pipeline_gmm_k         = params.pipeline_gmm_k         ?: 2
-params.pipeline_beta          = params.pipeline_beta          ?: 1.0
-params.pipeline_gamma         = params.pipeline_gamma         ?: 0.0
-params.pipeline_seed          = params.pipeline_seed          ?: 42
-params.pipeline_dp_gap_bp     = params.pipeline_dp_gap_bp     ?: 0
-params.pipeline_presmooth_bins= params.pipeline_presmooth_bins?: 2
+params.run_pipeline          = (params.run_pipeline ?: true)
+params.pipeline_out_dir      = (params.pipeline_out_dir ?: "${params.out_dir}/postproc_k_auto")
+params.pipeline_chunk_size   = (params.pipeline_chunk_size   ?: 1000000)
+params.pipeline_chunk_overlap= (params.pipeline_chunk_overlap?: 100000)
+params.pipeline_min_distance = (params.pipeline_min_distance ?: 0)
+params.pipeline_max_distance = (params.pipeline_max_distance ?: 100000)
+params.pipeline_sample_frac  = (params.pipeline_sample_frac  ?: 0.01)
+params.pipeline_gmm_k        = (params.pipeline_gmm_k        ?: 2)
+params.pipeline_beta         = (params.pipeline_beta         ?: 1.0)
+params.pipeline_gamma        = (params.pipeline_gamma        ?: 0.0)
+params.pipeline_seed         = (params.pipeline_seed         ?: 42)
+params.pipeline_dp_gap_bp    = (params.pipeline_dp_gap_bp    ?: 0)
+params.postsel_fdr_method    = (params.postsel_fdr_method    ?: 'storey')
+params.postsel_bootstrap     = (params.postsel_bootstrap     ?: 400)
+params.postsel_lambda_start  = (params.postsel_lambda_start  ?: 0.20)
+params.postsel_lambda_end    = (params.postsel_lambda_end    ?: 0.95)
+params.postsel_lambda_step   = (params.postsel_lambda_step   ?: 0.01)
+params.postsel_pi0_floor     = (params.postsel_pi0_floor     ?: 0.01)
+params.postsel_pi0_ceil      = (params.postsel_pi0_ceil      ?: 1.0)
 
-params.postsel_fdr_method     = params.postsel_fdr_method     ?: 'storey'
-params.postsel_bootstrap      = params.postsel_bootstrap      ?: 400
-params.postsel_lambda_start   = params.postsel_lambda_start   ?: 0.20
-params.postsel_lambda_end     = params.postsel_lambda_end     ?: 0.95
-params.postsel_lambda_step    = params.postsel_lambda_step    ?: 0.01
-params.postsel_pi0_floor      = params.postsel_pi0_floor      ?: 0.01
-params.postsel_pi0_ceil       = params.postsel_pi0_ceil       ?: 1.0
-
-// ── 자원 기본 ──
-params.cpus     = params.cpus     ?: 8
-params.memory   = params.memory   ?: '64 GB'
-params.time     = params.time     ?: '24h'
-
-// (컨테이너는 config에서 다이제스트로 고정하므로 여기선 기본값을 두지 않음)
-
-workflow {
-  if( !params.cls_file || !params.feat_file || !params.mutations_file ){
-    log.error "Required: --cls_file, --feat_file, --mutations_file"
-    System.exit(1)
-  }
-
-  // ⬇⬇⬇ 세 파일을 한 번에 넘기는 튜플 채널
-  Channel.of( tuple( file(params.cls_file), file(params.feat_file), file(params.mutations_file) ) ) \
-    | TRAIN_DRIVERFORMER
-}
-
-process TRAIN_DRIVERFORMER {
-  tag "driverformer"
-
-  cpus   params.cpus
-  memory params.memory
-  time   params.time
-
-  // CloudOS/Docker에서 config의 process.container가 적용됨
-  label 'gpu'                    // ← config의 withLabel: gpu { accelerator 1 }가 매핑됨
-  publishDir params.out_dir, mode: 'copy'
-
-  // 멀티라인 회피: process.env 사용
-  env PYTHONPATH             : (System.getenv('PYTHONPATH') ?: '.') + ":$PWD"
-  env OMP_NUM_THREADS        : params.torch_threads.toString()
-  env MKL_NUM_THREADS        : params.torch_threads.toString()
-  env OPENBLAS_NUM_THREADS   : params.torch_threads.toString()
-  env NUMEXPR_NUM_THREADS    : params.torch_threads.toString()
-  env MPLBACKEND             : 'Agg'
-  env TOKENIZERS_PARALLELISM : 'false'
+// ===== 1) 설치(venv) =====
+process SETUP_DEPS {
+  cpus 1; memory '4 GB'; time '2h'
+  publishDir "${params.out_dir}", mode: 'copy', overwrite: true
 
   input:
-  tuple path cls_file, path feat_file, path mut_file   // ← tuple 입력으로 변경
+    path REQS
+    path WHEELS_DIR
 
   output:
-  path "${params.out_dir}"
+    path "venv", emit: VENV
 
-  // 단일 문자열 스크립트(멀티라인 따옴표 미사용)
+  // 한 줄 script — 달러($) 이스케이프 금지(그대로 두어야 bash에서 동작)
+  script:
+    "python -m venv venv && " +
+    ". venv/bin/activate && " +
+    "python -m pip install -U pip wheel setuptools --no-cache-dir && " +
+    // basename 비교 (정상 명령치환 사용)
+    "REQ_BN=$(basename '!{REQS}'); " +
+    "[ -f '!{REQS}' ] && [ \"$REQ_BN\" = 'requirements.txt' ] && python -m pip install -r '!{REQS}' --no-cache-dir || true && " +
+    // wheels 오프라인 설치(있으면)
+    "[ -d '!{WHEELS_DIR}' ] && python -m pip install --no-index --find-links '!{WHEELS_DIR}' '!{WHEELS_DIR}'/*.whl || true"
+}
+
+
+// ===== 2) 실행 =====
+process DRIVERFORMER_RUN {
+  cpus 8; memory '32 GB'; time '72h'
+  publishDir "${params.out_dir}", mode: 'copy', overwrite: true
+
+  input:
+    path CLS
+    path FEAT
+    path MUTS
+    path VENV   // venv 또는 더미(항상 전달)
+
+  output:
+    path "stdout.txt"
+    path "stderr.txt"
+
   script:
   {
-    def pre = [
-      'bash','-lc',
-      [
-        'echo "[INFO] Host: $(hostname)  Date: $(date)"',
-        'if command -v nvidia-smi >/dev/null 2>&1; then echo "[INFO] nvidia-smi:"; nvidia-smi || true; else echo "[WARN] nvidia-smi not found"; fi',
-        'python - <<PY\n' +
-        'import sys, torch\n' +
-        'print("[PY] python =", sys.executable)\n' +
-        'print("[PY] torch  =", torch.__version__)\n' +
-        'print("[PY] cuda?  =", torch.cuda.is_available(), " nGPU =", torch.cuda.device_count())\n' +
-        'print("[PY] dev0   =", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "NA")\n' +
-        'PY'
-      ].join(' && ')
-    ].join(' ')
+    // segment_lengths 정규화
+    def segRaw  = params.segment_lengths ? (params.segment_lengths instanceof List ? params.segment_lengths.join(' ') : params.segment_lengths.toString()) : ''
+    def segNorm = segRaw.replace(',', ' ').trim().replaceAll(/\s+/, ' ').replaceAll(/^\"|\"$/, '')
+    def segNums = segNorm ? segNorm.split(/\s+/).findAll{ it ==~ /\d+/ }.join(' ') : ''
+    def segOpt  = segNums ? "--segment-lengths ${segNums} " : ""
 
-    def args = [
-      'python','-u','-m','driverformer',
-      '--cls-file',             cls_file.toString(),
-      '--feat-file',            feat_file.toString(),
-      '--mutations-file',       mut_file.toString(),
-      '--out-dir',              params.out_dir.toString(),
-      '--lr',                   params.lr.toString(),
-      '--batch-size',           params.batch_size.toString(),
-      '--epochs',               params.epochs.toString(),
-      '--seed',                 params.seed.toString(),
-      '--d-model',              params.d_model.toString(),
-      '--nhead',                params.nhead.toString(),
-      '--num-layers',           params.num_layers.toString(),
-      '--dim-feedforward',      params.dim_feedforward.toString(),
-      '--dropout',              params.dropout.toString(),
-      '--max-seq-len',          params.max_seq_len.toString(),
-      '--overlap-factor',       params.overlap_factor.toString(),
-      '--huber-factor',         params.huber_factor.toString(),
-      '--cutmix-p',             params.cutmix_p.toString(),
-      '--num-data-workers',     params.num_data_workers.toString(),
-      '--torch-threads',        params.torch_threads.toString(),
-      '--len-alpha',            params.len_alpha.toString(),
-      '--res-beta',             params.res_beta.toString()
-    ]
+    def flags = ''
+    if (params.use_mad)      flags += '--use-mad '
+    if (params.label_roll)   flags += '--label-roll '
+    if (params.run_pipeline) flags += '--run-pipeline '
 
-    if( params.use_mad ) {
-      args << '--use-mad'
-    }
-    if( params.label_roll ) {
-      args << '--label-roll'
-      args << '--label-roll-width' << params.label_roll_width.toString()
-    }
+    def venvAct = "[ -d '!{VENV}' ] && . '!{VENV}/bin/activate' || true; "
 
-    def seg = params.segment_lengths?.toString()?.trim()
-    if( seg ) {
-      args << '--segment-lengths'
-      args.addAll( seg.split(/\s+/) as List )
-    }
+    def cmd =
+      venvAct +
+      "python -u -m driverformer " +
+      "--cls-file ${CLS} --feat-file ${FEAT} --mutations-file ${MUTS} " +
+      "--out-dir ${params.out_dir} " +
+      "--lr ${params.lr} --batch-size ${params.batch_size} --epochs ${params.epochs} --seed ${params.seed} " +
+      "--d-model ${params.d_model} --nhead ${params.nhead} --num-layers ${params.num_layers} " +
+      "--dim-feedforward ${params.dim_feedforward} --dropout ${params.dropout} --max-seq-len ${params.max_seq_len} " +
+      "--overlap-factor ${params.overlap_factor} --huber-factor ${params.huber_factor} --cutmix-p ${params.cutmix_p} " +
+      "--num-data-workers ${params.num_data_workers} --torch-threads ${params.torch_threads} " +
+      "--len-alpha ${params.len_alpha} --res-beta ${params.res_beta} --label-roll-width ${params.label_roll_width} " +
+      "--pipeline-out-dir ${params.pipeline_out_dir} --pipeline-chunk-size ${params.pipeline_chunk_size} " +
+      "--pipeline-chunk-overlap ${params.pipeline_chunk_overlap} --pipeline-min-distance ${params.pipeline_min_distance} " +
+      "--pipeline-max-distance ${params.pipeline_max_distance} --pipeline-sample-frac ${params.pipeline_sample_frac} " +
+      "--pipeline-gmm-k ${params.pipeline_gmm_k} --pipeline-beta ${params.pipeline_beta} --pipeline-gamma ${params.pipeline_gamma} " +
+      "--pipeline-seed ${params.pipeline_seed} --pipeline-dp-gap-bp ${params.pipeline_dp_gap_bp} " +
+      "--postsel-fdr-method ${params.postsel_fdr_method} --postsel-bootstrap ${params.postsel_bootstrap} " +
+      "--postsel-lambda-start ${params.postsel_lambda_start} --postsel-lambda-end ${params.postsel_lambda_end} " +
+      "--postsel-lambda-step ${params.postsel_lambda_step} --postsel-pi0-floor ${params.postsel_pi0_floor} --postsel-pi0-ceil ${params.postsel_pi0_ceil} " +
+      segOpt + flags +
+      "1>stdout.txt 2>stderr.txt"
 
-    if( params.run_pipeline ) {
-      args << '--run-pipeline'
-      args.addAll([
-        '--pipeline-out-dir',        params.pipeline_out_dir.toString(),
-        '--pipeline-chunk-size',     params.pipeline_chunk_size.toString(),
-        '--pipeline-chunk-overlap',  params.pipeline_chunk_overlap.toString(),
-        '--pipeline-min-distance',   params.pipeline_min_distance.toString(),
-        '--pipeline-max-distance',   params.pipeline_max_distance.toString(),
-        '--pipeline-sample-frac',    params.pipeline_sample_frac.toString(),
-        '--pipeline-gmm-k',          params.pipeline_gmm_k.toString(),
-        '--pipeline-beta',           params.pipeline_beta.toString(),
-        '--pipeline-gamma',          params.pipeline_gamma.toString(),
-        '--pipeline-seed',           params.pipeline_seed.toString(),
-        '--pipeline-dp-gap-bp',      params.pipeline_dp_gap_bp.toString(),
-        '--pipeline-presmooth-bins', params.pipeline_presmooth_bins.toString()
-      ])
-    }
+    return cmd
+  }
+}
 
-    args.addAll([
-      '--postsel-fdr-method',   params.postsel_fdr_method.toString(),
-      '--postsel-bootstrap',    params.postsel_bootstrap.toString(),
-      '--postsel-lambda-start', params.postsel_lambda_start.toString(),
-      '--postsel-lambda-end',   params.postsel_lambda_end.toString(),
-      '--postsel-lambda-step',  params.postsel_lambda_step.toString(),
-      '--postsel-pi0-floor',    params.postsel_pi0_floor.toString(),
-      '--postsel-pi0-ceil',     params.postsel_pi0_ceil.toString()
-    ])
+// ===== 워크플로 =====
+workflow {
+  if( !params.cls_file )       error "Missing required param: --cls_file"
+  if( !params.feat_file )      error "Missing required param: --feat_file"
+  if( !params.mutations_file ) error "Missing required param: --mutations_file"
 
-    [ pre, args.join(' ') ].join(' && ')
+  ch_cls  = Channel.fromPath(params.cls_file)
+  ch_feat = Channel.fromPath(params.feat_file)
+  ch_muts = Channel.fromPath(params.mutations_file)
+
+  ch_reqs_exist = Channel.fromPath("${projectDir}/requirements.txt", checkIfExists: true)
+  ch_dummy      = Channel.fromPath("${projectDir}/driverformer/__init__.py", checkIfExists: true)
+  ch_reqs   = ch_reqs_exist.ifEmpty(ch_dummy)
+
+  ch_wheels_exist = Channel.fromPath("${projectDir}/wheels", checkIfExists: true)
+  ch_wheels = ch_wheels_exist.ifEmpty(ch_dummy)
+
+  if (params.setup_deps) {
+    SETUP_DEPS(ch_reqs, ch_wheels)
+    DRIVERFORMER_RUN(ch_cls, ch_feat, ch_muts, SETUP_DEPS.out.VENV)
+  } else {
+    DRIVERFORMER_RUN(ch_cls, ch_feat, ch_muts, ch_dummy)
   }
 }
