@@ -63,8 +63,8 @@ process DRIVERFORMER_RUN {
     path CLS
     path FEAT
     path MUTS
-    path DF_PKG    stageAs: 'driverformer'          // ← 이름 고정
-    path TRAIN_PY  stageAs: 'trainDriverFormer.py'  // ← 이름 고정
+    path DF_PKG,    stageAs: 'driverformer'          // ← 이름 고정
+    path TRAIN_PY,  stageAs: 'trainDriverFormer.py'  // ← 이름 고정
     path REQS
     path WHEELS_DIR
 
