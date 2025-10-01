@@ -58,6 +58,15 @@ process DRIVERFORMER_RUN {
   time '72h'
   publishDir "${params.out_dir}", mode: 'copy', overwrite: true
   label 'gpu'        // ← config의 withLabel: gpu { accelerator 1 } 적용
+// 리스트/문자열 → "10 50 100" 으로 정규화해서 env로 주입(문자열 대입)
+def SEGLEN_VAL = (
+  (params.segment_lengths instanceof List
+    ? params.segment_lengths.join(' ')
+    : (params.segment_lengths ?: '')
+  ).toString().trim().replaceAll(',', ' ').replaceAll(/\s+/, ' ')
+)
+env 'SEGLEN', SEGLEN_VAL
+
 
   input:
     path CLS
@@ -71,14 +80,6 @@ process DRIVERFORMER_RUN {
   output:
     path "stdout.txt"
     path "stderr.txt"
-
-def SEGLEN_VAL = (
-  (params.segment_lengths instanceof List
-    ? params.segment_lengths.join(' ')
-    : (params.segment_lengths ?: '')
-  ).toString().trim().replaceAll(',', ' ').replaceAll(/\s+/, ' ')
-)
-env 'SEGLEN', SEGLEN_VAL
 
   shell:
   '''
@@ -187,7 +188,8 @@ PYINFO
     --postsel-pi0-floor       '!{params.postsel_pi0_floor}'
     --postsel-pi0-ceil        '!{params.postsel_pi0_ceil}'
   )
-  [ -n "$SEGLEN" ] && COMMON_ARGS+=( --segment-lengths $SEGLEN )
+[ -n "$SEGLEN" ] && COMMON_ARGS+=( --segment-lengths $SEGLEN )
+
 
   FLAGS=()
   [ "!{params.use_mad}"      = "true" ] && FLAGS+=( --use-mad )
