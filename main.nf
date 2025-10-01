@@ -100,8 +100,8 @@ process TRAIN_DRIVERFORMER {
   // CloudOS 환경이면 Batch 실행기로 강제(일반 로컬이면 그대로 local)
   executor ( System.getenv('AWS_BATCH_JOB_ID') ? 'awsbatch' : (params.executor ?: 'local') )
 
-  accelerator 1
-  container   CONTAINER_REF
+  accelerator 1                            // GPU 1개 요청
+  container   CONTAINER_REF                // 컨테이너 다이제스트/태그/직접지정 우선순위 적용
 
   publishDir params.out_dir, mode: 'copy'
 
@@ -158,7 +158,7 @@ process TRAIN_DRIVERFORMER {
       '--huber-factor',   params.huber_factor.toString(),
       '--cutmix-p',       params.cutmix_p.toString(),
       '--num-data-workers', params.num_data_workers.toString(),
-      '--torch-threads',  params.torch_threads.toString(),
+      '--torch-threads',    params.torch_threads.toString(),
       '--len-alpha',      params.len_alpha.toString(),
       '--res-beta',       params.res_beta.toString()
     ]
