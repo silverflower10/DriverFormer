@@ -112,17 +112,37 @@ env 'SEGLEN', SEGLEN_VAL
     echo "[INFO] no wheels directory staged"
   fi
 
-  # ==== pip install (SSL-safe) ====
-  PIP_OPTS="--no-cache-dir --retries 5 --timeout 60 \
-            --index-url https://pypi.org/simple \
-            --trusted-host pypi.org --trusted-host files.pythonhosted.org"
-  python -m pip install -U pip wheel setuptools $PIP_OPTS || true
+# ==== pip install (SSL-safe, binary-only, light resolver) ====
+export PIP_NO_INPUT=1
+export PIP_DISABLE_PIP_VERSION_CHECK=1
+export PIP_NO_BUILD_ISOLATION=1
+# 바이너리 wheel만, 소스빌드 금지 => 메모리/시간 절약
+PIP_OPTS="--no-cache-dir --retries 5 --timeout 60 --prefer-binary --only-binary=:all: \
+          --index-url https://pypi.org/simple \
+          --trusted-host pypi.org --trusted-host files.pythonhosted.org"
 
-  if [ -f "!{REQS}" ] && [ "$(basename "!{REQS}")" = "requirements.txt" ]; then
-    echo "[SETUP] Installing requirements.txt (filtered)"
-    grep -viE '^(torch|torchvision|torchaudio|pytorch-triton|triton|nvidia-|cuda|cudnn|cudatoolkit)' "!{REQS}" > .req_filtered.txt || true
-    [ -s .req_filtered.txt ] && python -m pip install $PIP_OPTS -r .req_filtered.txt || true
+python -m pip install -U pip wheel setuptools $PIP_OPTS || true
+
+# requirements.txt가 있으면 내용 정리 후 가볍게 설치
+if [ -f "!{REQS}" ] && [ "$(basename "!{REQS}")" = "requirements.txt" ]; then
+  echo "[SETUP] Installing requirements.txt (sanitised)"
+  # 1) conda export 경로(@ file://), 편집형(-e), VCS(git+), torch/cuda 스택, fonttools 제거
+  grep -viE '^(torch|torchvision|torchaudio|pytorch-triton|triton|nvidia-|cuda|cudnn|cudatoolkit)' "!{REQS}" \
+  | grep -viE '\s@\s*file://' \
+  | grep -viE '^\s*git\+|^\s*-e\s+' \
+  | grep -viE '^\s*fonttools(\b|[<>=])' \
+  > .req_raw.txt || true
+
+  # 2) 패키지명만 남겨 의존성 해석 부하↓ (의존성은 아래 "탑업"에서 보충됨)
+  awk -F'[<>=]' '{print $1}' .req_raw.txt | sed 's/^\s\+//; s/\s\+$//' | sed '/^$/d' | sort -u > .req_filtered.txt || true
+
+  if [ -s .req_filtered.txt ]; then
+    python -m pip install $PIP_OPTS --no-deps -r .req_filtered.txt || true
+  else
+    echo "[SETUP] nothing to install from requirements.txt (after sanitising)"
   fi
+fi
+
 
   if [ -d wheels ]; then
     echo "[SETUP] Installing from local wheels (offline fallback)"; set +e
