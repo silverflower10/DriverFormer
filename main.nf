@@ -57,24 +57,23 @@ process SETUP_DEPS {
   publishDir "${params.out_dir}", mode: 'copy', overwrite: true
 
   input:
-    path REQS
-    path WHEELS_DIR
+    path REQS        // requirements.txt 또는 더미
+    path WHEELS_DIR  // wheels/ 또는 더미
 
   output:
     path "venv", emit: VENV
 
-  // 한 줄 script — 달러($) 이스케이프 금지(그대로 두어야 bash에서 동작)
+  // 한 줄 script — 모든 $ 는 \$ 로 이스케이프
   script:
     "python -m venv venv && " +
     ". venv/bin/activate && " +
     "python -m pip install -U pip wheel setuptools --no-cache-dir && " +
-    // basename 비교 (정상 명령치환 사용)
-    "REQ_BN=$(basename '!{REQS}'); " +
-    "[ -f '!{REQS}' ] && [ \"$REQ_BN\" = 'requirements.txt' ] && python -m pip install -r '!{REQS}' --no-cache-dir || true && " +
-    // wheels 오프라인 설치(있으면)
+    // basename 비교 (Groovy 보간 방지를 위해 \$ 사용)
+    "REQ_BN=\\\$(basename '!{REQS}'); " +
+    "[ -f '!{REQS}' ] && [ \"\\\$REQ_BN\" = 'requirements.txt' ] && python -m pip install -r '!{REQS}' --no-cache-dir || true && " +
+    // wheels 오프라인 설치 (있으면)
     "[ -d '!{WHEELS_DIR}' ] && python -m pip install --no-index --find-links '!{WHEELS_DIR}' '!{WHEELS_DIR}'/*.whl || true"
 }
-
 
 // ===== 2) 실행 =====
 process DRIVERFORMER_RUN {
