@@ -9,7 +9,7 @@ params.out_dir         = params.out_dir         ?: 'results/run'
 
 // training/pipeline defaults (괄호 제거)
 params.lr              = params.lr              ?: 2e-4
-params.batch_size      = params.batch_size      ?: 32
+params.batch_size      = params.batch_size      ?: 8
 params.epochs          = params.epochs          ?: 2
 params.seed            = params.seed            ?: 42
 params.d_model         = params.d_model         ?: 768
@@ -23,7 +23,7 @@ params.overlap_factor  = params.overlap_factor  ?: 0.3
 params.use_mad         = params.use_mad         ?: true
 params.huber_factor    = params.huber_factor    ?: 3.0
 params.cutmix_p        = params.cutmix_p        ?: 0.2
-params.num_data_workers= params.num_data_workers?: 8
+params.num_data_workers= params.num_data_workers?: 2
 params.torch_threads   = params.torch_threads   ?: 8
 params.len_alpha       = params.len_alpha       ?: 0.5
 params.res_beta        = params.res_beta        ?: 0.5
