@@ -261,17 +261,25 @@ PYINFO
   [ "!{params.run_pipeline}" = "true" ] && FLAGS+=( --run-pipeline )
 
   # ---- run: module preferred, fallback to staged script ----
-  python - <<'PY'; import importlib.util, sys; sys.exit(0 if importlib.util.find_spec("driverformer") else 1); PY
-  if [ $? -eq 0 ]; then
-    echo "[RUN] python -m driverformer ..."
-    set -x; python -u -m driverformer "${COMMON_ARGS[@]}" "${FLAGS[@]}"; set +x
+  # ---- run: module preferred, fallback to staged script ----
+  # python 스크립트의 종료 코드를 직접 if문에서 확인하는 방식으로 변경
+  if python - <<'PY'
+  import importlib.util, sys
+  sys.exit(0 if importlib.util.find_spec("driverformer") else 1)
+  PY
+  then
+    # 종료 코드가 0일 때 (driverformer 모듈이 설치되어 있을 때)
+      echo "[RUN] python -m driverformer ..."
+      set -x; python -u -m driverformer "${COMMON_ARGS[@]}" "${FLAGS[@]}"; set +x
   elif [ -f "trainDriverFormer.py" ]; then
-    echo "[RUN] python trainDriverFormer.py ..."
-    set -x; python -u "trainDriverFormer.py" "${COMMON_ARGS[@]}" "${FLAGS[@]}"; set +x
+      # 종료 코드가 0이 아니고, trainDriverFormer.py 파일이 있을 때
+      echo "[RUN] python trainDriverFormer.py ..."
+      set -x; python -u "trainDriverFormer.py" "${COMMON_ARGS[@]}" "${FLAGS[@]}"; set +x
   else
-    echo "[ERROR] Neither 'driverformer' package nor 'trainDriverFormer.py' staged."
-    exit 2
-  fi
+      # 둘 다 아닐 때
+      echo "[ERROR] Neither 'driverformer' package nor 'trainDriverFormer.py' staged."
+      exit 2
+  fi  
 
   echo "[DONE] DriverFormer finished."
   '''
