@@ -72,7 +72,7 @@ process DRIVERFORMER_RUN {
     path "stderr.txt"
 
   shell:
-
+  '''
   set -euo pipefail
   exec > >(tee stdout.txt) 2> >(tee stderr.txt >&2)
 
@@ -212,7 +212,7 @@ PYINFO
   fi
 
   echo "[DONE] DriverFormer finished."
- 
+  '''
 }
 
 // ---- Workflow ----
