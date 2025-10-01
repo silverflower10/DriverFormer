@@ -1,16 +1,5 @@
-// main.nf — DriverFormer (DSL2, CloudOS-robust, profile-agnostic fallback)
+// main.nf — DriverFormer (DSL2, CloudOS-ready, tuple inputs, no multiline quotes)
 nextflow.enable.dsl = 2
-
-// ── 컨테이너 참조(우선순위: --container > repo@digest > repo:tag > 기본다이제스트) ──
-params.container        = params.container        ?: null
-params.container_repo   = params.container_repo   ?: 'docker.io/silverflower10/driverformer'
-params.container_tag    = params.container_tag    ?: null
-params.container_digest = params.container_digest ?: 'sha256:ac15ea10f138b6f03552e0c59d804fac2903392623a5cfb92b6d7340564237c8'
-def CONTAINER_REF = params.container ?: (
-  params.container_digest ? "${params.container_repo}@${params.container_digest}"
-                          : (params.container_tag ? "${params.container_repo}:${params.container_tag}"
-                                                  : "${params.container_repo}@${params.container_digest}")
-)
 
 // ── 필수 입력 ──
 params.cls_file        = params.cls_file        ?: null
@@ -69,39 +58,42 @@ params.cpus     = params.cpus     ?: 8
 params.memory   = params.memory   ?: '64 GB'
 params.time     = params.time     ?: '24h'
 
+// (컨테이너는 nextflow.config의 cloudos 프로필에서 다이제스트로 고정됨)
+
 workflow {
-  // ===== 진단 로그: 프로필/컨테이너/필수 파라미터 =====
+  // 프로필/컨테이너/필수 파라미터 진단(원인 추적용)
   log.info "active_profile = ${workflow.profile}"
-  log.info "container_ref  = ${CONTAINER_REF}"
   log.info "params.cls_file=${params.cls_file}"
   log.info "params.feat_file=${params.feat_file}"
   log.info "params.mutations_file=${params.mutations_file}"
 
-  // ===== 필수 3개 가드 =====
+  // 필수 3개 가드
   def missing = []
   if( !params.cls_file )        missing << 'cls_file'
   if( !params.feat_file )       missing << 'feat_file'
   if( !params.mutations_file )  missing << 'mutations_file'
-  if( missing ) { log.error "Missing params: ${missing.join(', ')}"; System.exit(1) }
+  if( missing ) {
+    log.error "Missing params: ${missing.join(', ')}"
+    System.exit(1)
+  }
 
   // 세 파일을 한 번에 넘기는 튜플 채널
   Channel.of( tuple( file(params.cls_file), file(params.feat_file), file(params.mutations_file) ) ) \
     | TRAIN_DRIVERFORMER
 }
-
 process TRAIN_DRIVERFORMER {
   tag "driverformer"
 
-  // === 자원/컨테이너/실행기를 프로세스 안에서 '직접' 강제 (config 미적용 대비) ===
+  // === 자원/컨테이너를 프로세스 안에서 '직접' 강제 ===
   cpus   (params.cpus   ?: 16)
   memory (params.memory ?: '128 GB')
   time   (params.time   ?: '24h')
 
-  // CloudOS 환경이면 Batch 실행기로 강제(일반 로컬이면 그대로 local)
-  executor ( System.getenv('AWS_BATCH_JOB_ID') ? 'awsbatch' : (params.executor ?: 'local') )
+  // 1) GPU 직접 요청 (config 없어도 적용)
+  accelerator 1
 
-  accelerator 1                            // GPU 1개 요청
-  container   CONTAINER_REF                // 컨테이너 다이제스트/태그/직접지정 우선순위 적용
+  // 2) 컨테이너 직접 고정 (다이제스트)
+  container 'docker.io/silverflower10/driverformer@sha256:ac15ea10f138b6f03552e0c59d804fac2903392623a5cfb92b6d7340564237c8'
 
   publishDir params.out_dir, mode: 'copy'
 
@@ -120,7 +112,7 @@ process TRAIN_DRIVERFORMER {
   output:
   path "${params.out_dir}"
 
-  // ===== 실행 스크립트(단일 문자열) =====
+  // (나머지 script: { ... } 부분은 네가 올린 그대로 유지)
   script:
   {
     def pre = [
