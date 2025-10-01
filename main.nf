@@ -58,6 +58,13 @@ process DRIVERFORMER_RUN {
   time '72h'
   publishDir "${params.out_dir}", mode: 'copy', overwrite: true
 
+  // 👇 여기 추가: 리스트/문자열 모두 "10 50 100" 형태로 정규화
+  def SEGLEN = (
+    params.segment_lengths instanceof List
+      ? params.segment_lengths.join(' ')
+      : (params.segment_lengths ?: '')
+  ).toString().trim().replaceAll(',', ' ').replaceAll(/\s+/, ' ')
+
   input:
     path CLS
     path FEAT
@@ -166,7 +173,6 @@ PYINFO
     --dim-feedforward     !{params.dim_feedforward} \
     --dropout             !{params.dropout} \
     --max-seq-len         !{params.max_seq_len} \
-    --segment-lengths     '!{params.segment_lengths.join(' ')}' \
     --overlap-factor      !{params.overlap_factor} \
     --huber-factor        !{params.huber_factor} \
     --cutmix-p            !{params.cutmix_p} \
@@ -193,6 +199,8 @@ PYINFO
     --postsel-lambda-step      !{params.postsel_lambda_step} \
     --postsel-pi0-floor        !{params.postsel_pi0_floor} \
     --postsel-pi0-ceil         !{params.postsel_pi0_ceil}'"
+
+  [ -n "!{SEGLEN}" ] && COMMON_ARGS="$COMMON_ARGS --segment-lengths !{SEGLEN}"
 
   FLAGS=""
   [ "!{params.use_mad}"      = "true" ] && FLAGS="${FLAGS} --use-mad"
