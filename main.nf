@@ -81,16 +81,20 @@ workflow {
   Channel.of( tuple( file(params.cls_file), file(params.feat_file), file(params.mutations_file) ) ) \
     | TRAIN_DRIVERFORMER
 }
-
 process TRAIN_DRIVERFORMER {
   tag "driverformer"
 
-  cpus   params.cpus
-  memory params.memory
-  time   params.time
+  // === 자원/컨테이너를 프로세스 안에서 '직접' 강제 ===
+  cpus   (params.cpus   ?: 16)
+  memory (params.memory ?: '128 GB')
+  time   (params.time   ?: '24h')
 
-  // config의 withLabel: gpu { accelerator N } 적용
-  label 'gpu'
+  // 1) GPU 직접 요청 (config 없어도 적용)
+  accelerator 1
+
+  // 2) 컨테이너 직접 고정 (다이제스트)
+  container 'docker.io/silverflower10/driverformer@sha256:ac15ea10f138b6f03552e0c59d804fac2903392623a5cfb92b6d7340564237c8'
+
   publishDir params.out_dir, mode: 'copy'
 
   // 환경변수(멀티라인 회피)
@@ -108,7 +112,7 @@ process TRAIN_DRIVERFORMER {
   output:
   path "${params.out_dir}"
 
-  // 단일 문자열 스크립트(멀티라인 따옴표 미사용)
+  // (나머지 script: { ... } 부분은 네가 올린 그대로 유지)
   script:
   {
     def pre = [
@@ -128,42 +132,37 @@ process TRAIN_DRIVERFORMER {
 
     def args = [
       'python','-u','-m','driverformer',
-      '--cls-file',             cls_file.toString(),
-      '--feat-file',            feat_file.toString(),
-      '--mutations-file',       mut_file.toString(),
-      '--out-dir',              params.out_dir.toString(),
-      '--lr',                   params.lr.toString(),
-      '--batch-size',           params.batch_size.toString(),
-      '--epochs',               params.epochs.toString(),
-      '--seed',                 params.seed.toString(),
-      '--d-model',              params.d_model.toString(),
-      '--nhead',                params.nhead.toString(),
-      '--num-layers',           params.num_layers.toString(),
-      '--dim-feedforward',      params.dim_feedforward.toString(),
-      '--dropout',              params.dropout.toString(),
-      '--max-seq-len',          params.max_seq_len.toString(),
-      '--overlap-factor',       params.overlap_factor.toString(),
-      '--huber-factor',         params.huber_factor.toString(),
-      '--cutmix-p',             params.cutmix_p.toString(),
-      '--num-data-workers',     params.num_data_workers.toString(),
-      '--torch-threads',        params.torch_threads.toString(),
-      '--len-alpha',            params.len_alpha.toString(),
-      '--res-beta',             params.res_beta.toString()
+      '--cls-file',       cls_file.toString(),
+      '--feat-file',      feat_file.toString(),
+      '--mutations-file', mut_file.toString(),
+      '--out-dir',        params.out_dir.toString(),
+      '--lr',             params.lr.toString(),
+      '--batch-size',     params.batch_size.toString(),
+      '--epochs',         params.epochs.toString(),
+      '--seed',           params.seed.toString(),
+      '--d-model',        params.d_model.toString(),
+      '--nhead',          params.nhead.toString(),
+      '--num-layers',     params.num_layers.toString(),
+      '--dim-feedforward',params.dim_feedforward.toString(),
+      '--dropout',        params.dropout.toString(),
+      '--max-seq-len',    params.max_seq_len.toString(),
+      '--overlap-factor', params.overlap_factor.toString(),
+      '--huber-factor',   params.huber_factor.toString(),
+      '--cutmix-p',       params.cutmix_p.toString(),
+      '--num-data-workers', params.num_data_workers.toString(),
+      '--torch-threads',    params.torch_threads.toString(),
+      '--len-alpha',      params.len_alpha.toString(),
+      '--res-beta',       params.res_beta.toString()
     ]
 
-    if( params.use_mad ) {
-      args << '--use-mad'
-    }
+    if( params.use_mad ) { args << '--use-mad' }
     if( params.label_roll ) {
       args << '--label-roll'
       args << '--label-roll-width' << params.label_roll_width.toString()
     }
 
     def seg = params.segment_lengths?.toString()?.trim()
-    if( seg ) {
-      args << '--segment-lengths'
-      args.addAll( seg.split(/\s+/) as List )
-    }
+    if( seg ) { args << '--segment-lengths'; args.addAll( seg.split(/\s+/) as List ) }
 
     if( params.run_pipeline ) {
       args << '--run-pipeline'
