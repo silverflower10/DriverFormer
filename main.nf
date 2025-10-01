@@ -266,7 +266,7 @@ PYINFO
   if python - <<'PY'
   import importlib.util, sys
   sys.exit(0 if importlib.util.find_spec("driverformer") else 1)
-  PY
+PY
   then
     # 종료 코드가 0일 때 (driverformer 모듈이 설치되어 있을 때)
       echo "[RUN] python -m driverformer ..."
