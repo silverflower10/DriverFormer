@@ -53,9 +53,6 @@ params.postsel_pi0_ceil      = params.postsel_pi0_ceil      ?: 1.0
 // ---- Process ----
 process DRIVERFORMER_RUN {
   tag "driverformer"
-  cpus 8
-  memory '80 GB'
-  time '72h'
   publishDir "${params.out_dir}", mode: 'copy', overwrite: true
   label 'gpu'        // ← config의 withLabel: gpu { accelerator 1 } 적용
 // 리스트/문자열 → "10 50 100" 으로 정규화해서 env로 주입(문자열 대입)
