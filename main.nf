@@ -67,7 +67,6 @@ def SEGLEN_VAL = (
 )
 env 'SEGLEN', SEGLEN_VAL
 
-
   input:
     path CLS
     path FEAT
@@ -84,6 +83,7 @@ env 'SEGLEN', SEGLEN_VAL
   shell:
   '''
   set -euo pipefail
+  SEGLEN="${SEGLEN:-}"   
   exec > >(tee stdout.txt) 2> >(tee stderr.txt >&2)
 
   echo "[INFO] PWD = $(pwd)"
@@ -102,9 +102,6 @@ env 'SEGLEN', SEGLEN_VAL
   export NUMEXPR_NUM_THREADS=!{task.cpus}
   export PYTHONPATH="$PWD:$PWD/driverformer${PYTHONPATH:+:$PYTHONPATH}"
   echo "[INFO] PYTHONPATH head = $(echo "$PYTHONPATH" | tr ':' '\n' | head -n 3)"
-
-  # 모듈 인식이 흔들릴 경우 폴백: 편집형 설치(빠르고 안전)
-  python -m pip install -e ./driverformer || true
 
 
   # wheels link (optional)
