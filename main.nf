@@ -12,7 +12,7 @@ params.setup_deps      = (params.setup_deps in [false,'false',0,'0']) ? false : 
 
 // training/pipeline defaults
 params.lr              = params.lr              ?: 2e-4
-params.batch_size      = params.batch_size      ?: 16
+params.batch_size      = params.batch_size      ?: 32
 params.epochs          = params.epochs          ?: 2
 params.seed            = params.seed            ?: 42
 params.d_model         = params.d_model         ?: 768
