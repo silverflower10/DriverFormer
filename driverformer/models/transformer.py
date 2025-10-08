@@ -118,47 +118,80 @@ class AttnEncoderLayer(nn.Module):
                 k.view(new_shape).transpose(1,2),
                 v.view(new_shape).transpose(1,2))
 
+
     def forward(self, src, *, need_weights=False, key_padding_mask=None):
         """
         src: (B, L, D)
         key_padding_mask: (B, L) bool, True = PAD(가려야 함)
         """
+        B, T, D = src.shape
         h = self.ln1(src)
-        q, k, v = self._qkv_proj(h)
+
+        q, k, v = self._qkv_proj(h)                           # (B,h,T,dh)
         q, k = self.rope(q, k)
 
-        attn_mask = None
+        # ----- Key 마스크(키를 가리는 용도) & Query 마스크(쿼리 위치 자체를 무효화) -----
+        attn_mask_keys = None
+        qpad_mask = None
         if key_padding_mask is not None:
-            # (B,T)→(B,1,1,T)로 브로드캐스트 가능하게
-            if key_padding_mask.dim() != 2 or key_padding_mask.shape[1] != src.shape[1]:
+            if key_padding_mask.dim() != 2 or key_padding_mask.shape[1] != T:
                 raise ValueError(f"key_padding_mask must be (B,T)={src.shape[:2]}, got {tuple(key_padding_mask.shape)}")
-            attn_mask = key_padding_mask[:, None, None, :].to(dtype=torch.bool, device=src.device)
+            kpad = key_padding_mask.to(dtype=torch.bool, device=src.device)      # (B,T)
+            attn_mask_keys = kpad[:, None, None, :]                               # (B,1,1,T)  -> 키만 가림
+            qpad_mask = kpad[:, None, :, None]                                    # (B,1,T,1)  -> 쿼리 행 표시
+
+        # ----- SDPA: 연산은 안정적으로 하고 dtype은 원래대로 -----
+        q_sdpa = q if q.dtype == torch.float32 else q.float()
+        k_sdpa = k if k.dtype == torch.float32 else k.float()
+        v_sdpa = v if v.dtype == torch.float32 else v.float()
 
         attn_out = scaled_dot_product_attention(
-            q, k, v,
-            attn_mask=attn_mask,
+            q_sdpa, k_sdpa, v_sdpa,
+            attn_mask=attn_mask_keys,                    # True == mask
             dropout_p=self.drop.p if self.training else 0.0,
             is_causal=False
-        )
+        ).to(src.dtype)
+
         attn_out = attn_out.transpose(1,2).contiguous().view_as(src)
+        # 패딩된 쿼리 위치의 출력은 0으로 강제 (잔여연결에 쓰레기 안 섞이게)
+        if qpad_mask is not None:
+            attn_out = attn_out.masked_fill(qpad_mask.squeeze(1).unsqueeze(-1), 0.0)
+
         attn_out = self.proj_o(attn_out)
         src = src + self.res_scale * attn_out
 
         if need_weights:
-            scores = (q @ k.transpose(-2, -1)) / math.sqrt(self.head_dim)  # (B,h,L,L)
-            if key_padding_mask is not None:
-                # (B,L) -> (B,1,1,L)
-                mask = key_padding_mask[:, None, None, :].to(dtype=torch.bool, device=scores.device)
-                neg_inf = torch.finfo(scores.dtype).min  # dtype-safe
-                scores = scores.masked_fill(mask, neg_inf)
-            wei = scores.softmax(-1)
-            self.attn_weight = wei.detach()
+            # --- 가중치 저장: float32로 softmax, 완전-마스크 행(모두 -inf) 처리 ---
+            # (주의) softmax([-inf,...])는 NaN → 0으로 대체
+            scale = self.head_dim ** -0.5
+            scores = (q.float() @ k.float().transpose(-2, -1)) * scale          # (B,h,T,T)
+
+            if attn_mask_keys is not None:
+                scores = scores.masked_fill(attn_mask_keys, float("-inf"))
+
+            wei = F.softmax(scores, dim=-1)                                      # float32
+            # 모든 키가 가려진 쿼리 행 → softmax가 NaN이 되므로 0으로
+            bad_rows = ~torch.isfinite(wei).all(dim=-1, keepdim=True)            # (B,h,T,1)
+            wei = torch.where(bad_rows, torch.zeros_like(wei), wei)
+            # 쿼리 자체가 패딩인 행도 0으로
+            if qpad_mask is not None:
+                wei = wei.masked_fill(qpad_mask, 0.0)
+
+            wei = torch.nan_to_num(wei, nan=0.0, posinf=0.0, neginf=0.0).to(scores.dtype)
+            # 헤드 평균 후 저장
+            self.attn_weight = wei.mean(dim=1).detach()                           # (B,T,T)
         else:
             self.attn_weight = None
 
         h2  = self.ln2(src)
         src = src + self.res_scale * self.ffn(h2)
+
+        # 디버그(선택): 어텐션 출력이 유한한지 최종 체크
+        if DEBUG_NAN and not torch.isfinite(src).all():
+            raise RuntimeError("[AttnEncoderLayer] non-finite value detected")
+
         return src
+
 
 
 class GlobalTransformerEncoder(nn.Module):
