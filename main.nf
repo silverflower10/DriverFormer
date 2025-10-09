@@ -167,7 +167,6 @@ REQ
 
     if [ $ONLINE -eq 1 ]; then
       echo "[SETUP] Online mode: installing base constraints"
-      # 제약 먼저 설치(충돌 완화)
       python -m pip install "${PIP_OPTS[@]}" -c constraints.txt -r constraints.txt || true
 
       if [ -f "!{REQS}" ] && [ "$(basename "!{REQS}")" = "requirements.txt" ]; then
@@ -175,7 +174,6 @@ REQ
         # CUDA/torch 등 무거운 항목 제외
         grep -viE '^(torch|torchvision|torchaudio|pytorch[-]?triton|triton|nvidia-|cuda|cudnn|cudatoolkit|cupy|jax|jaxlib)' "!{REQS}" > .req_filtered.txt || true
         if [ -s .req_filtered.txt ]; then
-          # 1차: 제약 기반 설치 시도
           if ! python -m pip install "${PIP_OPTS[@]}" -c constraints.txt -r .req_filtered.txt; then
             echo "[WARN] Online install failed, trying --use-deprecated=legacy-resolver once"
             python -m pip install "${PIP_OPTS[@]}" -c constraints.txt -r .req_filtered.txt --use-deprecated=legacy-resolver || true
@@ -256,30 +254,26 @@ PYINFO
   [ -n "$SEGLEN" ] && COMMON_ARGS+=( --segment-lengths $SEGLEN )
 
   FLAGS=()
-  [ "!{params.use_mad}"      = "true" ] && FLAGS+=( --use-mad )
-  [ "!{params.label_roll}"   = "true" ] && FLAGS+=( --label-roll )
-  [ "!{params.run_pipeline}" = "true" ] && FLAGS+=( --run-pipeline )
+  case "!{params.use_mad}"       in true|True|TRUE ) FLAGS+=( --use-mad );; esac
+  case "!{params.label_roll}"    in true|True|TRUE ) FLAGS+=( --label-roll );; esac
+  case "!{params.run_pipeline}"  in true|True|TRUE ) FLAGS+=( --run-pipeline );; esac
+
+  # ---- args snapshot (exact tokens) ----
+  printf "[ARGS]  " ; printf "%q " "${COMMON_ARGS[@]}" ; echo
+  printf "[FLAGS] " ; printf "%q " "${FLAGS[@]}"       ; echo
+  echo   "[SEGLEN] '${SEGLEN}'"
 
   # ---- run: module preferred, fallback to staged script ----
-  # ---- run: module preferred, fallback to staged script ----
-  # python 스크립트의 종료 코드를 직접 if문에서 확인하는 방식으로 변경
-  if python - <<'PY'
-  import importlib.util, sys
-  sys.exit(0 if importlib.util.find_spec("driverformer") else 1)
-PY
-  then
-    # 종료 코드가 0일 때 (driverformer 모듈이 설치되어 있을 때)
-      echo "[RUN] python -m driverformer ..."
-      set -x; python -u -m driverformer "${COMMON_ARGS[@]}" "${FLAGS[@]}"; set +x
+  if python -c 'import importlib.util, sys; sys.exit(0 if importlib.util.find_spec("driverformer") else 1)'; then
+    echo "[RUN] python -m driverformer ..."
+    set -x; python -u -m driverformer "${COMMON_ARGS[@]}" "${FLAGS[@]}"; set +x
   elif [ -f "trainDriverFormer.py" ]; then
-      # 종료 코드가 0이 아니고, trainDriverFormer.py 파일이 있을 때
-      echo "[RUN] python trainDriverFormer.py ..."
-      set -x; python -u "trainDriverFormer.py" "${COMMON_ARGS[@]}" "${FLAGS[@]}"; set +x
+    echo "[RUN] python trainDriverFormer.py ..."
+    set -x; python -u "trainDriverFormer.py" "${COMMON_ARGS[@]}" "${FLAGS[@]}"; set +x
   else
-      # 둘 다 아닐 때
-      echo "[ERROR] Neither 'driverformer' package nor 'trainDriverFormer.py' staged."
-      exit 2
-  fi  
+    echo "[ERROR] Neither 'driverformer' package nor 'trainDriverFormer.py' staged."
+    exit 2
+  fi
 
   echo "[DONE] DriverFormer finished."
   '''
@@ -295,16 +289,16 @@ workflow {
   def ch_feat  = Channel.fromPath(params.feat_file)
   def ch_muts  = Channel.fromPath(params.mutations_file)
 
-  def ch_pkg    = Channel.fromPath("${projectDir}/driverformer",         checkIfExists: true)
-  def ch_train  = Channel.fromPath("${projectDir}/trainDriverFormer.py", checkIfExists: true)
+  def ch_pkg    = Channel.fromPath("${projectDir}/driverformer",           checkIfExists: true)
+  def ch_train  = Channel.fromPath("${projectDir}/trainDriverFormer.py",   checkIfExists: true)
 
-  def ch_reqs_exist = Channel.fromPath("${projectDir}/requirements.txt",         checkIfExists: true)
-  def ch_reqs_dummy = Channel.fromPath("${projectDir}/driverformer/__init__.py", checkIfExists: true)
-  def ch_reqs  = ch_reqs_exist.ifEmpty(ch_reqs_dummy)
+  def ch_reqs_exist  = Channel.fromPath("${projectDir}/requirements.txt",         checkIfExists: true)
+  def ch_reqs_dummy  = Channel.fromPath("${projectDir}/driverformer/__init__.py", checkIfExists: true)
+  def ch_reqs        = ch_reqs_exist.ifEmpty(ch_reqs_dummy)
 
-  def ch_wheels_exist = Channel.fromPath("${projectDir}/wheels",                 checkIfExists: true)
-  def ch_wheels_dummy = Channel.fromPath("${projectDir}/driverformer/__init__.py", checkIfExists: true)
-  def ch_wheels = ch_wheels_exist.ifEmpty(ch_wheels_dummy)
+  def ch_wheels_exist= Channel.fromPath("${projectDir}/wheels",                   checkIfExists: true)
+  def ch_wheels_dummy= Channel.fromPath("${projectDir}/driverformer/__init__.py", checkIfExists: true)
+  def ch_wheels      = ch_wheels_exist.ifEmpty(ch_wheels_dummy)
 
   DRIVERFORMER_RUN(ch_cls, ch_feat, ch_muts, ch_pkg, ch_train, ch_reqs, ch_wheels)
 }
