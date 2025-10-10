@@ -15,15 +15,15 @@ rolling_sum_nhpp(lam, y, len_kb, width=2) -> (lam_roll, y_roll, len_roll)
 
 from __future__ import annotations
 
+from typing import Tuple
 import torch
 import torch.nn.functional as F
 import torch.backends.cudnn as cudnn
-from typing import Tuple
 
 # 수치 안전 상수
-_RATE_MIN  = 1e-9
-_RATE_MAX  = 1e6
-_DEN_MIN   = 1e-12
+_RATE_MIN: float = 1e-9
+_RATE_MAX: float = 1e6
+_DEN_MIN: float  = 1e-12
 
 
 def _nan_to_num_(t: torch.Tensor) -> torch.Tensor:
@@ -91,9 +91,7 @@ def _conv1d_causal_sum(x: torch.Tensor, k: torch.Tensor) -> torch.Tensor:
     if k.ndim != 3 or k.size(0) != 1 or k.size(1) != 1:
         raise ValueError(f"k must be (1,1,K), got {tuple(k.shape)}")
 
-    B, T = x.shape
-    K    = int(k.size(-1))
-
+    K = int(k.size(-1))
     x1   = x.unsqueeze(1).contiguous()           # (B,1,T)
     xpad = F.pad(x1, (K-1, 0)).contiguous()      # (B,1,T+K-1)
 
