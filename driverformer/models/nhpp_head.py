@@ -3,12 +3,13 @@
 """
 models/nhpp_head.py — NHPP rate head (safe version)
 
-Updated on Mon Jul  7 19:20:00 2025  ← attention-save policy + safety clamps
+Updated on Mon Jul  7 19:20:00 2025  ← attention-save policy + safety clamps + grad sanitizer
 
 - Transformer 출력 x(B,T,D) → per-kb rate λ(B,T)
 - softplus로 양수 보장
 - exp(log_c) 오버플로우 방지(clamp)
 - 최종 λ는 [rate_min, rate_max]로 클램프 + NaN/Inf 치환
+- backward 시 λ-그래디언트 NaN/Inf를 0으로 살균(hook)해 MulBackward0 NaN 전파 차단
 """
 
 from __future__ import annotations
@@ -70,10 +71,14 @@ class NHPPHead(nn.Module):
         lam = torch.nan_to_num(lam, nan=self.rate_min, posinf=self.rate_max, neginf=self.rate_min)
         lam = lam.clamp(self.rate_min, self.rate_max)
 
+        # ★ Gradient sanitizer: 손실에서 내려오는 ∂L/∂λ가 NaN/Inf면 0으로 정리
+        if lam.requires_grad:
+            lam.register_hook(lambda g: torch.nan_to_num(g, nan=0.0, posinf=0.0, neginf=0.0))
+
         return lam
 
 
-if __name__ == "__main__":  # quick sanity
+if __name__ == "__main__":  # quick sanity (옵션)
     B, T, D = 2, 5, 768
     head = NHPPHead(D)
     x = torch.randn(B, T, D)
