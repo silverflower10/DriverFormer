@@ -241,6 +241,28 @@ def train_and_predict(args):
     )
     print(f"[INFO] #all_segments = {len(all_segments)}", flush=True)
 
+    # ==== VERIFY actually loaded modules (debug, once) ====
+    if os.environ.get("DF_VERIFY_IMPORTS", "1") == "1":
+        import inspect as _ins
+        import driverformer.data.rolling as _R
+        import driverformer.models.nhpp_head as _H
+        try:
+            print("[WHERE] rolling.py  ->", _R.__file__, flush=True)
+            head1 = _ins.getsource(_R._conv1d_causal_sum).splitlines()[0]
+            print("[HEAD ] _conv1d_causal_sum:", head1, flush=True)
+            if "cudnn.flags(enabled=False" not in head1:
+                print("[WARN] rolling is NOT safe version (cuDNN off not found)", flush=True)
+        except Exception as e:
+            print("[VERIFY] rolling getsource failed:", e, flush=True)
+        try:
+            print("[WHERE] nhpp_head.py->", _H.__file__, flush=True)
+            head2 = _ins.getsource(_H.NHPPHead.forward).splitlines()[0]
+            print("[HEAD ] NHPPHead.forward:", head2, flush=True)
+            if ("clamp(" not in head2) and ("nan_to_num" not in head2):
+                print("[WARN] NHPPHead is NOT safe version (clamp/nan_to_num not found)", flush=True)
+        except Exception as e:
+            print("[VERIFY] nhpp_head getsource failed:", e, flush=True)
+
     # ===== 1kb bin 라벨 =====
     if args.mutations_file:
         print(f"[LABEL] building 1kb labels (PASS only): {args.mutations_file}", flush=True)
