@@ -1,74 +1,85 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Sun Jun  8 18:41:23 2025
-Updated on Mon Jul  7 19:20:00 2025    ← NEW  (attention‑save policy)
+losses/nhpp.py — NHPP negative log-likelihood (SAFE)
 
-@author: silverflo
-
-Changes in this revision
-------------------------
-* 학습(epoch) 중 : Val‑loss 개선 시 **마지막 레이어 head‑mean 1장** 저장
-* 학습 완료(final): 베스트 모델로 **전체 레이어·헤드** 스택 저장
-* 그 외 로직(길이‑가중 residual sampler, Huber/IRLS 등)은 이전 버전과 동일
+- lam, y, dt 모두 NaN/Inf → 수치 치환
+- lam/log(λ) 수치안정: lam ∈ [LAM_MIN, LAM_MAX]
+- dt 음수 금지, 분모 0 방지(EPS)
+- 세그먼트 길이 정규화(per kb × 30) 동일 유지
 """
 
-# --------------------------------------------------------------------------- #
-# Imports & setup                                                             #
-# --------------------------------------------------------------------------- #
-import os, sys, math, random, pickle, argparse, gc, itertools
-from functools import partial
-from collections import defaultdict, Counter
-import numpy as np
-import pandas as pd
-from torch.nn.functional import scaled_dot_product_attention
+from __future__ import annotations
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
-from torch.optim import AdamW
-from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
-from rotary_embedding_torch import RotaryEmbedding
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-from pathlib import Path
-from scipy.stats import norm
-from sklearn.mixture import GaussianMixture
-from statsmodels.stats.multitest import fdrcorrection_twostage
-from tqdm import tqdm
-import warnings
-from scipy.special import logsumexp
-from typing import Optional
 
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
-torch.autograd.set_detect_anomaly(True)
+# ===== 수치 안전 상수 =====
+LAM_MIN: float = 1e-9
+LAM_MAX: float = 1e6
+EPS:     float = 1e-12
 
-CHROM_LIST_24 = [f"chr{i}" for i in range(1, 23)] + ["chrX", "chrY"]
-DEBUG_NAN = True  # NaN 디버깅
+__all__ = [
+    "trapezoid_nhpp_loss",
+    "trapezoid_nhpp_loss_segment_weighted",
+]
 
-# --------------------------------------------------------------------------- #
 
-def trapezoid_nhpp_loss(lam, y, len_kb, reduction="mean"):
+def _sanitize(lam: torch.Tensor, y: torch.Tensor, dt: torch.Tensor):
+    """NaN/Inf 및 음수 길이 방지."""
+    lam = torch.nan_to_num(lam, nan=LAM_MIN, posinf=LAM_MAX, neginf=LAM_MIN)
+    y   = torch.nan_to_num(y,   nan=0.0,     posinf=0.0,     neginf=0.0).clamp_min(0.0)
+    dt  = torch.nan_to_num(dt,  nan=0.0,     posinf=0.0,     neginf=0.0).clamp_min(0.0)
+    return lam, y, dt
+
+
+def trapezoid_nhpp_loss(
+    lam: torch.Tensor,          # (B,T)
+    y:   torch.Tensor,          # (B,T)
+    len_kb: torch.Tensor,       # (B,T)  Δt
+    reduction: str = "mean",    # "mean" | "none"
+) -> torch.Tensor:
     """
-    Bin-level(사각형) NHPP 음의 로그우도:
-      -ℓ = - Σ_i [ y_i log λ_i  -  λ_i * Δt_i ]
+    Bin-level NHPP 음의 로그우도:
+        -ℓ = - Σ_i [ y_i log λ_i  -  λ_i * Δt_i ]
     """
-    lam_safe = lam.clamp(1e-9, 1e4)
-    # Σ y_i log λ_i
-    sum_log = (y * torch.log(lam_safe)).sum(dim=1)
-    # Σ λ_i * Δt_i   ← (사다리꼴이 아니라 각 bin 자체 길이 사용)
-    integ = (lam_safe * len_kb).sum(dim=1)
-    ll = sum_log - integ
-    return (-ll if reduction == "none" else -ll.mean())
+    lam, y, dt = _sanitize(lam, y, len_kb)
+    lam_safe = lam.clamp(LAM_MIN, LAM_MAX)
+
+    # NLL = -( y·logλ - λΔt )
+    sum_log = (y * torch.log(lam_safe)).sum(dim=1)   # (B,)
+    integ   = (lam_safe * dt).sum(dim=1)             # (B,)
+    neg_ll  = -(sum_log - integ)                     # (B,)
+
+    neg_ll = torch.nan_to_num(neg_ll, nan=0.0, posinf=1e6, neginf=1e6)
+    if reduction == "none":
+        return neg_ll
+    elif reduction == "mean":
+        return neg_ll.mean()
+    else:
+        raise ValueError(f"reduction must be 'mean' or 'none', got {reduction!r}")
 
 
-def trapezoid_nhpp_loss_segment_weighted(lam, y, len_kb, w_seg):
+def trapezoid_nhpp_loss_segment_weighted(
+    lam: torch.Tensor,          # (B,T)
+    y:   torch.Tensor,          # (B,T)
+    len_kb: torch.Tensor,       # (B,T)
+    w_seg: torch.Tensor,        # (B,)
+) -> torch.Tensor:
     """
-    세그먼트별 NLL(bin) → (per-kb 정규화 × 30) → 세그먼트 허버가중 평균
-    (내부의 기본 손실은 bin-level NLL을 호출)
+    세그먼트별 NLL(bin) → (per-kb 정규화 × 30) → 세그먼트 가중 평균 스칼라 손실.
     """
-    per_seg = trapezoid_nhpp_loss(lam, y, len_kb, reduction="none")  # (B,)
-    seg_len = (len_kb.sum(dim=1) + 1e-9)
-    per_seg = (per_seg / seg_len) * 30.0
-    return (w_seg * per_seg).sum() / (w_seg.sum() + 1e-9)
+    lam, y, dt = _sanitize(lam, y, len_kb)
+    lam_safe = lam.clamp(LAM_MIN, LAM_MAX)
+
+    # bin-level NLL per segment
+    per_seg = trapezoid_nhpp_loss(lam_safe, y, dt, reduction="none")  # (B,)
+
+    # 길이 정규화(per kb) 후 ×30
+    seg_len = dt.sum(dim=1).clamp_min(EPS)        # (B,)
+    per_seg = (per_seg / seg_len) * 30.0          # (B,)
+
+    # 가중 평균
+    per_seg = torch.nan_to_num(per_seg, nan=0.0, posinf=1e6, neginf=1e6)
+    w = torch.nan_to_num(w_seg, nan=1.0, posinf=1.0, neginf=1.0).to(per_seg.dtype)
+    w_sum = w.sum().clamp_min(EPS)
+    loss  = (w * per_seg).sum() / w_sum
+    return loss
