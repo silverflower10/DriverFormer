@@ -12,6 +12,7 @@ Changes in this revision
 * 학습 완료(final): 베스트 모델로 **전체 레이어·헤드** 스택 저장
 * 그 외 로직(길이-가중 residual sampler, Huber/IRLS 등)은 이전 버전과 동일
 * NaN 방지 가드 및 촘촘한 디버그/미니덤프 추가
+* GPU backend 안전 모드(Flash/메모리절약 SDPA off, cuDNN deterministic) + 모든 lam 계산 전 out.contiguous()
 """
 
 # --------------------------------------------------------------------------- #
@@ -65,6 +66,19 @@ DEBUG_NAN = True
 _EPS       = 1e-8
 _RATE_MIN  = 1e-9
 _RATE_MAX  = 1e6  # 여유 상한
+
+# ===== GPU backend 안전 모드 ================================================
+import torch.backends.cudnn as _cudnn
+_cudnn.benchmark = False
+_cudnn.deterministic = True
+try:
+    from torch.backends.cuda import sdp_kernel
+    # Flash/메모리절약 SDPA 비활성, math만 사용
+    sdp_kernel(enable_flash=False, enable_mem_efficient=False, enable_math=True)
+except Exception:
+    pass
+os.environ.setdefault("CUDA_LAUNCH_BLOCKING", "1")
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 # ===== NaN/Inf safety helpers ===============================================
 def _nan_to_num_(t: torch.Tensor) -> torch.Tensor:
@@ -130,11 +144,9 @@ def calibrate_log_c_huber_like_training(model_c, loader, device,
         feat_emb = model_c["feature_embedder"](feat_b)
         fused    = model_c["feat_cls_fusion"](cls_b, feat_emb)
         chr_emb  = model_c["chrom_embedder"](cid_b).unsqueeze(1).expand_as(fused)
-        lam      = _safe_rate_(
-            model_c["nhpp_head"](
-                model_c["global_transformer"](fused + chr_emb, key_padding_mask=key_pad)
-            )
-        )
+        out      = model_c["global_transformer"](fused + chr_emb, key_padding_mask=key_pad)
+        out      = out.contiguous()
+        lam      = _safe_rate_(model_c["nhpp_head"](out))
 
         if label_roll and roll_width > 1:
             lam, y_b, len_b = rolling_sum_nhpp(lam, y_b, len_b, width=roll_width)
@@ -166,10 +178,12 @@ def calibrate_log_c_huber_like_training(model_c, loader, device,
         cid_b  = b["chrom_id"].to(device)
         key_pad = (len_b <= 0)
 
-        feat = model_c["feature_embedder"](feat_b)
-        fused = model_c["feat_cls_fusion"](cls_b, feat)
-        chr_emb = model_c["chrom_embedder"](cid_b).unsqueeze(1).expand_as(fused)
-        lam = _safe_rate_(model_c["nhpp_head"](model_c["global_transformer"](fused + chr_emb, key_padding_mask=key_pad)))
+        feat     = model_c["feature_embedder"](feat_b)
+        fused    = model_c["feat_cls_fusion"](cls_b, feat)
+        chr_emb  = model_c["chrom_embedder"](cid_b).unsqueeze(1).expand_as(fused)
+        out      = model_c["global_transformer"](fused + chr_emb, key_padding_mask=key_pad)
+        out      = out.contiguous()
+        lam      = _safe_rate_(model_c["nhpp_head"](out))
 
         if label_roll and roll_width > 1:
             lam, y_b, len_b = rolling_sum_nhpp(lam, y_b, len_b, width=roll_width)
@@ -369,6 +383,7 @@ def train_and_predict(args):
             else:
                 out = model_components["global_transformer"](fused + chr_emb, key_padding_mask=key_pad)
 
+            out = out.contiguous()
             lam = _safe_rate_(model_components["nhpp_head"](out))  # per-kb rate
 
             # roll(창 합) 사용 시 lam,y,len을 동일 창으로 변환 후 다시 안전화
@@ -482,9 +497,9 @@ def train_and_predict(args):
                         feat = model_components["feature_embedder"](feat_b)
                         fused = model_components["feat_cls_fusion"](cls_b, feat)
                         chr_emb = model_components["chrom_embedder"](cid_b).unsqueeze(1).expand_as(fused)
-                        lam = _safe_rate_(model_components["nhpp_head"](
-                            model_components["global_transformer"](fused + chr_emb, key_padding_mask=key_pad)
-                        ))
+                        out = model_components["global_transformer"](fused + chr_emb, key_padding_mask=key_pad)
+                        out = out.contiguous()
+                        lam = _safe_rate_(model_components["nhpp_head"](out))
 
                         if args.label_roll and args.label_roll_width > 1:
                             lam, y_b, len_b = rolling_sum_nhpp(lam, y_b, len_b, width=args.label_roll_width)
@@ -515,9 +530,9 @@ def train_and_predict(args):
                         feat = model_components["feature_embedder"](feat_b)
                         fused = model_components["feat_cls_fusion"](cls_b, feat)
                         chr_emb = model_components["chrom_embedder"](cid_b).unsqueeze(1).expand_as(fused)
-                        lam = _safe_rate_(model_components["nhpp_head"](
-                            model_components["global_transformer"](fused + chr_emb, key_padding_mask=key_pad)
-                        ))
+                        out = model_components["global_transformer"](fused + chr_emb, key_padding_mask=key_pad)
+                        out = out.contiguous()
+                        lam = _safe_rate_(model_components["nhpp_head"](out))
 
                         if args.label_roll and args.label_roll_width > 1:
                             lam, y_b, len_b = rolling_sum_nhpp(lam, y_b, len_b, width=args.label_roll_width)
@@ -568,9 +583,9 @@ def train_and_predict(args):
                         feat = model_components["feature_embedder"](feat_b)
                         fused = model_components["feat_cls_fusion"](cls_b, feat)
                         chr_emb = model_components["chrom_embedder"](cid_b).unsqueeze(1).expand_as(fused)
-                        lam = _safe_rate_(model_components["nhpp_head"](
-                            model_components["global_transformer"](fused + chr_emb, key_padding_mask=key_pad)
-                        ))
+                        out = model_components["global_transformer"](fused + chr_emb, key_padding_mask=key_pad)
+                        out = out.contiguous()
+                        lam = _safe_rate_(model_components["nhpp_head"](out))
 
                         if args.label_roll and args.label_roll_width > 1:
                             lam, y_b, len_b = rolling_sum_nhpp(lam, y_b, len_b, width=args.label_roll_width)
@@ -687,9 +702,9 @@ def train_and_predict(args):
                 feat_emb = model_components["feature_embedder"](feat_b)
                 fused    = model_components["feat_cls_fusion"](cls_b, feat_emb)
                 chr_emb  = model_components["chrom_embedder"](cid_b).unsqueeze(1).expand_as(fused)
-                lam      = _safe_rate_(model_components["nhpp_head"](
-                    model_components["global_transformer"](fused + chr_emb, key_padding_mask=key_pad)
-                ))
+                out      = model_components["global_transformer"](fused + chr_emb, key_padding_mask=key_pad)
+                out      = out.contiguous()
+                lam      = _safe_rate_(model_components["nhpp_head"](out))
 
                 if args.label_roll and args.label_roll_width > 1:
                     lam, y_b, len_b = rolling_sum_nhpp(lam, y_b, len_b, width=args.label_roll_width)
@@ -719,9 +734,9 @@ def train_and_predict(args):
                 fused    = model_components["feat_cls_fusion"](cls_b, feat_emb)
                 chr_emb  = model_components["chrom_embedder"](cid_b).unsqueeze(1).expand_as(fused)
 
-                lam      = _safe_rate_(model_components["nhpp_head"](
-                    model_components["global_transformer"](fused + chr_emb, key_padding_mask=key_pad)
-                ))
+                out      = model_components["global_transformer"](fused + chr_emb, key_padding_mask=key_pad)
+                out      = out.contiguous()
+                lam      = _safe_rate_(model_components["nhpp_head"](out))
                 if args.label_roll and args.label_roll_width > 1:
                     lam, y_b, len_b = rolling_sum_nhpp(lam, y_b, len_b, width=args.label_roll_width)
                     lam = _safe_rate_(lam); y_b = _safe_count_(y_b); len_b = _safe_len_(len_b)
@@ -764,9 +779,9 @@ def train_and_predict(args):
                 feat_emb = model_components["feature_embedder"](feat_b)
                 fused    = model_components["feat_cls_fusion"](cls_b, feat_emb)
                 chr_emb  = model_components["chrom_embedder"](cid_b).unsqueeze(1).expand_as(fused)
-                lam_raw  = _safe_rate_(model_components["nhpp_head"](
-                    model_components["global_transformer"](fused + chr_emb, key_padding_mask=key_pad)
-                ))
+                out      = model_components["global_transformer"](fused + chr_emb, key_padding_mask=key_pad)
+                out      = out.contiguous()
+                lam_raw  = _safe_rate_(model_components["nhpp_head"](out))
 
                 lam_save = lam_raw
                 if args.label_roll and args.label_roll_width > 1:
