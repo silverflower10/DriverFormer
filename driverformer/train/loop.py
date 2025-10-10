@@ -4,15 +4,13 @@
 Created on Sun Jun  8 18:41:23 2025
 Updated on Mon Jul  7 19:20:00 2025    ← NEW (attention-save policy, NaN guards & dense debug)
 
-@author: silverflo
-
-Changes in this revision
-------------------------
-* 학습(epoch) 중 : Val-loss 개선 시 **마지막 레이어 head-mean 1장** 저장
-* 학습 완료(final): 베스트 모델로 **전체 레이어·헤드** 스택 저장
-* 그 외 로직(길이-가중 residual sampler, Huber/IRLS 등)은 이전 버전과 동일
-* NaN 방지 가드 및 촘촘한 디버그/미니덤프 추가
-* GPU backend 안전 모드(Flash/메모리절약 SDPA off, cuDNN deterministic) + 모든 lam 계산 전 out.contiguous()
+* 학습(epoch) 중 : Val-loss 개선 시 마지막 레이어 head-mean 1장 저장
+* 학습 완료(final): 베스트 모델로 전체 레이어·헤드 스택 저장
+* NaN 방지 가드, 디버그/미니덤프
+* GPU backend 안전 모드(Flash/메모리절약 SDPA off, cuDNN deterministic + disabled)
+* 모든 lam 계산 전 out.contiguous()
+* VERIFY 블록(실제 import 확인) + 안전 롤링 강제 패치(monkey-patch)
+* λ-그래디언트 살균 hook (MulBackward0 NaN 전파 차단)
 """
 
 # --------------------------------------------------------------------------- #
@@ -48,7 +46,8 @@ from ..data.labels import (
     _build_y_map_from_mutations,
     _attach_labels_from_y_map,
 )
-from ..data.rolling import rolling_sum_nhpp
+# D) rolling: 함수 import 대신 모듈 import (폴백 패치/검증과 호환)
+import driverformer.data.rolling as R
 from ..utils.io import (
     build_chrom_id_map, unwrap, efficient_load_ckpt, efficient_save_ckpt,
     check_pretrained_model_exists, set_seed
@@ -67,8 +66,9 @@ _EPS       = 1e-8
 _RATE_MIN  = 1e-9
 _RATE_MAX  = 1e6  # 여유 상한
 
-# ===== GPU backend 안전 모드 ================================================
+# ===== A) GPU backend 안전 모드 ============================================
 import torch.backends.cudnn as _cudnn
+_cudnn.enabled = False            # ★ cuDNN 완전 비활성화(최후 안전)
 _cudnn.benchmark = False
 _cudnn.deterministic = True
 try:
@@ -149,7 +149,7 @@ def calibrate_log_c_huber_like_training(model_c, loader, device,
         lam      = _safe_rate_(model_c["nhpp_head"](out))
 
         if label_roll and roll_width > 1:
-            lam, y_b, len_b = rolling_sum_nhpp(lam, y_b, len_b, width=roll_width)
+            lam, y_b, len_b = R.rolling_sum_nhpp(lam, y_b, len_b, width=roll_width)
             lam   = _safe_rate_(lam); y_b = _safe_count_(y_b); len_b = _safe_len_(len_b)
 
         mu_b = lam * len_b
@@ -186,7 +186,7 @@ def calibrate_log_c_huber_like_training(model_c, loader, device,
         lam      = _safe_rate_(model_c["nhpp_head"](out))
 
         if label_roll and roll_width > 1:
-            lam, y_b, len_b = rolling_sum_nhpp(lam, y_b, len_b, width=roll_width)
+            lam, y_b, len_b = R.rolling_sum_nhpp(lam, y_b, len_b, width=roll_width)
             lam   = _safe_rate_(lam); y_b = _safe_count_(y_b); len_b = _safe_len_(len_b)
 
         base = lam / max(c_cur, _EPS)
@@ -241,27 +241,59 @@ def train_and_predict(args):
     )
     print(f"[INFO] #all_segments = {len(all_segments)}", flush=True)
 
-    # ==== VERIFY actually loaded modules (debug, once) ====
+    # ==== B) VERIFY actually loaded modules (debug, once) ====
     if os.environ.get("DF_VERIFY_IMPORTS", "1") == "1":
         import inspect as _ins
         import driverformer.data.rolling as _R
         import driverformer.models.nhpp_head as _H
         try:
+            src_r = _ins.getsource(_R._conv1d_causal_sum)
             print("[WHERE] rolling.py  ->", _R.__file__, flush=True)
-            head1 = _ins.getsource(_R._conv1d_causal_sum).splitlines()[0]
-            print("[HEAD ] _conv1d_causal_sum:", head1, flush=True)
-            if "cudnn.flags(enabled=False" not in head1:
-                print("[WARN] rolling is NOT safe version (cuDNN off not found)", flush=True)
+            print("[CHECK] cudnn.flags in rolling:", ("cudnn.flags" in src_r), flush=True)
         except Exception as e:
             print("[VERIFY] rolling getsource failed:", e, flush=True)
         try:
+            src_h = _ins.getsource(_H.NHPPHead.forward)
             print("[WHERE] nhpp_head.py->", _H.__file__, flush=True)
-            head2 = _ins.getsource(_H.NHPPHead.forward).splitlines()[0]
-            print("[HEAD ] NHPPHead.forward:", head2, flush=True)
-            if ("clamp(" not in head2) and ("nan_to_num" not in head2):
-                print("[WARN] NHPPHead is NOT safe version (clamp/nan_to_num not found)", flush=True)
+            print("[CHECK] safe head (clamp & nan_to_num):",
+                  ("clamp(" in src_h and "nan_to_num" in src_h), flush=True)
         except Exception as e:
             print("[VERIFY] nhpp_head getsource failed:", e, flush=True)
+
+    # ==== C) monkey-patch fallback (if old rolling is loaded) ====
+    try:
+        import inspect as _ins
+        import driverformer.data.rolling as _R
+        import torch.backends.cudnn as cudnn
+        src_r = _ins.getsource(_R._conv1d_causal_sum)
+        if "cudnn.flags" not in src_r:
+            print("[PATCH] rolling: monkey-patch safe conv/rolling", flush=True)
+
+            def _safe_conv1d_causal_sum(x, k):
+                K = int(k.size(-1))
+                x1 = F.pad(x.unsqueeze(1), (K-1, 0)).contiguous()
+                with cudnn.flags(enabled=False, benchmark=False, deterministic=True):
+                    y = F.conv1d(x1, k, padding=0)
+                return y.squeeze(1).contiguous()
+
+            def _safe_rolling(lam, y, dt, *, width=2):
+                if width <= 1: return lam, y, dt
+                RATE_MIN, RATE_MAX, DEN_MIN = 1e-9, 1e6, 1e-12
+                lam = torch.nan_to_num(lam, nan=0.0, posinf=RATE_MAX, neginf=0.0).clamp(RATE_MIN, RATE_MAX)
+                y   = torch.nan_to_num(y,   nan=0.0, posinf=0.0,     neginf=0.0).clamp_min(0.0)
+                dt  = torch.nan_to_num(dt,  nan=0.0, posinf=0.0,     neginf=0.0).clamp_min(0.0)
+                k   = torch.ones(1,1,int(max(1,width)), device=lam.device, dtype=lam.dtype)
+                mu  = lam * dt
+                y_r  = _safe_conv1d_causal_sum(y,  k)
+                mu_r = _safe_conv1d_causal_sum(mu, k)
+                dt_r = _safe_conv1d_causal_sum(dt, k).clamp_min(DEN_MIN)
+                lam_r= (mu_r/dt_r).clamp(RATE_MIN, RATE_MAX)
+                return lam_r, y_r, dt_r
+
+            _R._conv1d_causal_sum = _safe_conv1d_causal_sum
+            _R.rolling_sum_nhpp   = _safe_rolling
+    except Exception as e:
+        print("[PATCH] monkey-patch skipped:", e, flush=True)
 
     # ===== 1kb bin 라벨 =====
     if args.mutations_file:
@@ -408,9 +440,13 @@ def train_and_predict(args):
             out = out.contiguous()
             lam = _safe_rate_(model_components["nhpp_head"](out))  # per-kb rate
 
+            # ★ λ-그래디언트 살균: 손실에서 NaN/Inf가 내려오면 0으로 정리
+            if lam.requires_grad:
+                lam.register_hook(lambda g: torch.nan_to_num(g, nan=0.0, posinf=0.0, neginf=0.0))
+
             # roll(창 합) 사용 시 lam,y,len을 동일 창으로 변환 후 다시 안전화
             if args.label_roll and args.label_roll_width > 1:
-                lam, y_b, len_b = rolling_sum_nhpp(lam, y_b, len_b, width=args.label_roll_width)
+                lam, y_b, len_b = R.rolling_sum_nhpp(lam, y_b, len_b, width=args.label_roll_width)
                 lam   = _safe_rate_(lam); y_b = _safe_count_(y_b); len_b = _safe_len_(len_b)
 
             # seg별 가중치
@@ -524,7 +560,7 @@ def train_and_predict(args):
                         lam = _safe_rate_(model_components["nhpp_head"](out))
 
                         if args.label_roll and args.label_roll_width > 1:
-                            lam, y_b, len_b = rolling_sum_nhpp(lam, y_b, len_b, width=args.label_roll_width)
+                            lam, y_b, len_b = R.rolling_sum_nhpp(lam, y_b, len_b, width=args.label_roll_width)
                             lam = _safe_rate_(lam); y_b = _safe_count_(y_b); len_b = _safe_len_(len_b)
 
                         mu = lam * len_b
@@ -536,7 +572,7 @@ def train_and_predict(args):
                 rs = np.array(list(res.values()), dtype=np.float64)
                 scale = compute_mad(rs) if args.use_mad else compute_iqr(rs)
                 if not np.isfinite(scale) or scale <= 0: scale = 1.0
-                delta = max(args.huber_factor * scale, 1e-6)
+                delta = max(args.huber_factor * scale, 1.e-6)
                 w_dict = {sid: huber_weight(r, delta) for sid, r in res.items()}
 
                 tot_num = tot_den = 0.0
@@ -557,7 +593,7 @@ def train_and_predict(args):
                         lam = _safe_rate_(model_components["nhpp_head"](out))
 
                         if args.label_roll and args.label_roll_width > 1:
-                            lam, y_b, len_b = rolling_sum_nhpp(lam, y_b, len_b, width=args.label_roll_width)
+                            lam, y_b, len_b = R.rolling_sum_nhpp(lam, y_b, len_b, width=args.label_roll_width)
                             lam = _safe_rate_(lam); y_b = _safe_count_(y_b); len_b = _safe_len_(len_b)
 
                         # per-seg NLL (길이 정규화 후 kb*30)
@@ -610,7 +646,7 @@ def train_and_predict(args):
                         lam = _safe_rate_(model_components["nhpp_head"](out))
 
                         if args.label_roll and args.label_roll_width > 1:
-                            lam, y_b, len_b = rolling_sum_nhpp(lam, y_b, len_b, width=args.label_roll_width)
+                            lam, y_b, len_b = R.rolling_sum_nhpp(lam, y_b, len_b, width=args.label_roll_width)
                             lam = _safe_rate_(lam); y_b = _safe_count_(y_b); len_b = _safe_len_(len_b)
 
                         mu = lam * len_b
@@ -729,7 +765,7 @@ def train_and_predict(args):
                 lam      = _safe_rate_(model_components["nhpp_head"](out))
 
                 if args.label_roll and args.label_roll_width > 1:
-                    lam, y_b, len_b = rolling_sum_nhpp(lam, y_b, len_b, width=args.label_roll_width)
+                    lam, y_b, len_b = R.rolling_sum_nhpp(lam, y_b, len_b, width=args.label_roll_width)
                     lam = _safe_rate_(lam); y_b = _safe_count_(y_b); len_b = _safe_len_(len_b)
 
                 mu_b = lam * len_b
@@ -760,7 +796,7 @@ def train_and_predict(args):
                 out      = out.contiguous()
                 lam      = _safe_rate_(model_components["nhpp_head"](out))
                 if args.label_roll and args.label_roll_width > 1:
-                    lam, y_b, len_b = rolling_sum_nhpp(lam, y_b, len_b, width=args.label_roll_width)
+                    lam, y_b, len_b = R.rolling_sum_nhpp(lam, y_b, len_b, width=args.label_roll_width)
                     lam = _safe_rate_(lam); y_b = _safe_count_(y_b); len_b = _safe_len_(len_b)
 
                 sum_log  = (y_b * torch.log(lam)).sum(dim=1)
@@ -807,7 +843,7 @@ def train_and_predict(args):
 
                 lam_save = lam_raw
                 if args.label_roll and args.label_roll_width > 1:
-                    lam_r, _y_ignore, _dt_ignore = rolling_sum_nhpp(
+                    lam_r, _y_ignore, _dt_ignore = R.rolling_sum_nhpp(
                         lam_raw, y_b, len_b, width=args.label_roll_width
                     )
                     lam_save = _safe_rate_(lam_r)
