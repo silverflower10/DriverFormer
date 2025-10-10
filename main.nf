@@ -2,56 +2,62 @@
 nextflow.enable.dsl = 2
 
 // ---- Param defaults (no params{} block) ----
-params.cls_file        = params.cls_file        ?: null
-params.feat_file       = params.feat_file       ?: null
-params.mutations_file  = params.mutations_file  ?: null
-params.out_dir         = params.out_dir         ?: 'results/run'
+params.cls_file         = params.cls_file         ?: null
+params.feat_file        = params.feat_file        ?: null
+params.mutations_file   = params.mutations_file   ?: null
+params.out_dir          = params.out_dir          ?: 'results/run'
 
 // 설치 스위치(온라인 불가 환경/사전 빌드 컨테이너에서는 false로)
-params.setup_deps      = (params.setup_deps in [false,'false',0,'0']) ? false : true
+params.setup_deps       = (params.setup_deps in [false,'false',0,'0']) ? false : true
 
 // training/pipeline defaults
-params.lr              = params.lr              ?: 5e-5
-params.batch_size      = params.batch_size      ?: 32
-params.epochs          = params.epochs          ?: 20
-params.seed            = params.seed            ?: 42
-params.d_model         = params.d_model         ?: 768
-params.nhead           = params.nhead           ?: 8
-params.num_layers      = params.num_layers      ?: 6
-params.dim_feedforward = params.dim_feedforward ?: 3072
-params.dropout         = params.dropout         ?: 0.2
-params.max_seq_len     = params.max_seq_len     ?: 1024
-params.segment_lengths = params.segment_lengths ?: [10,50,100]
-params.overlap_factor  = params.overlap_factor  ?: 0.3
-params.use_mad         = params.use_mad         ?: true
-params.huber_factor    = params.huber_factor    ?: 3.0
-params.cutmix_p        = params.cutmix_p        ?: 0.2
-params.num_data_workers= params.num_data_workers?: 0
-params.torch_threads   = params.torch_threads   ?: 8
-params.len_alpha       = params.len_alpha       ?: 0.5
-params.res_beta        = params.res_beta        ?: 0.5
-params.label_roll      = params.label_roll      ?: true
-params.label_roll_width= params.label_roll_width?: 2
+params.lr               = params.lr               ?: 5e-5
+params.batch_size       = params.batch_size       ?: 32
+params.epochs           = params.epochs           ?: 20
+params.seed             = params.seed             ?: 42
+params.d_model          = params.d_model          ?: 768
+params.nhead            = params.nhead            ?: 8
+params.num_layers       = params.num_layers       ?: 6
+params.dim_feedforward  = params.dim_feedforward  ?: 3072
+params.dropout          = params.dropout          ?: 0.2
+params.max_seq_len      = params.max_seq_len      ?: 1024
+params.segment_lengths  = params.segment_lengths  ?: [10,50,100]
+params.overlap_factor   = params.overlap_factor   ?: 0.3
+params.use_mad          = (params.use_mad in [false,'false',0,'0']) ? false : true
+params.huber_factor     = params.huber_factor     ?: 3.0
+params.cutmix_p         = params.cutmix_p         ?: 0.2
+params.num_data_workers = params.num_data_workers ?: 0
+params.torch_threads    = params.torch_threads    ?: 8
+params.len_alpha        = params.len_alpha        ?: 0.5
+params.res_beta         = params.res_beta         ?: 0.5
+params.label_roll       = (params.label_roll in [false,'false',0,'0']) ? false : true
+params.label_roll_width = params.label_roll_width ?: 2
+params.save_attention   = (params.save_attention in [true,'true',1,'1']) ? true : false
+params.resume_checkpoint= params.resume_checkpoint?: null
 
-params.run_pipeline          = params.run_pipeline          ?: true
-params.pipeline_out_dir      = params.pipeline_out_dir      ?: "${params.out_dir}/postproc_k_auto"
-params.pipeline_chunk_size   = params.pipeline_chunk_size   ?: 1000000
-params.pipeline_chunk_overlap= params.pipeline_chunk_overlap?: 100000
-params.pipeline_min_distance = params.pipeline_min_distance ?: 0
-params.pipeline_max_distance = params.pipeline_max_distance ?: 100000
-params.pipeline_sample_frac  = params.pipeline_sample_frac  ?: 0.01
-params.pipeline_gmm_k        = params.pipeline_gmm_k        ?: 2
-params.pipeline_beta         = params.pipeline_beta         ?: 1.0
-params.pipeline_gamma        = params.pipeline_gamma        ?: 0.0
-params.pipeline_seed         = params.pipeline_seed         ?: 42
-params.pipeline_dp_gap_bp    = params.pipeline_dp_gap_bp    ?: 0
-params.postsel_fdr_method    = params.postsel_fdr_method    ?: 'storey'
-params.postsel_bootstrap     = params.postsel_bootstrap     ?: 400
-params.postsel_lambda_start  = params.postsel_lambda_start  ?: 0.20
-params.postsel_lambda_end    = params.postsel_lambda_end    ?: 0.95
-params.postsel_lambda_step   = params.postsel_lambda_step   ?: 0.01
-params.postsel_pi0_floor     = params.postsel_pi0_floor     ?: 0.01
-params.postsel_pi0_ceil      = params.postsel_pi0_ceil      ?: 1.0
+params.run_pipeline           = (params.run_pipeline in [false,'false',0,'0']) ? false : true
+params.pipeline_out_dir       = params.pipeline_out_dir       ?: "${params.out_dir}/postproc_k_auto"
+params.pipeline_chunk_size    = params.pipeline_chunk_size    ?: 1000000
+params.pipeline_chunk_overlap = params.pipeline_chunk_overlap ?: 100000
+params.pipeline_min_distance  = params.pipeline_min_distance  ?: 0
+params.pipeline_max_distance  = params.pipeline_max_distance  ?: 100000
+params.pipeline_sample_frac   = params.pipeline_sample_frac   ?: 0.01
+params.pipeline_gmm_k         = params.pipeline_gmm_k         ?: 2
+params.pipeline_gmm_auto      = (params.pipeline_gmm_auto in [true,'true',1,'1']) ? true : false
+params.pipeline_beta          = params.pipeline_beta          ?: 1.0
+params.pipeline_gamma         = params.pipeline_gamma         ?: 0.0
+params.pipeline_seed          = params.pipeline_seed          ?: 42
+params.pipeline_dp_gap_bp     = params.pipeline_dp_gap_bp     ?: 0
+// presmooth 기본: label_roll_width 상속 (없으면 1)
+params.pipeline_presmooth_bins = params.pipeline_presmooth_bins ?: (params.label_roll_width ?: 1)
+
+params.postsel_fdr_method     = params.postsel_fdr_method     ?: 'storey'
+params.postsel_bootstrap      = params.postsel_bootstrap      ?: 400
+params.postsel_lambda_start   = params.postsel_lambda_start   ?: 0.20
+params.postsel_lambda_end     = params.postsel_lambda_end     ?: 0.95
+params.postsel_lambda_step    = params.postsel_lambda_step    ?: 0.01
+params.postsel_pi0_floor      = params.postsel_pi0_floor      ?: 0.01
+params.postsel_pi0_ceil       = params.postsel_pi0_ceil       ?: 1.0
 
 // ---- Process ----
 process DRIVERFORMER_RUN {
@@ -121,18 +127,15 @@ process DRIVERFORMER_RUN {
   # pip 설치: 온라인 감지 → 온라인/오프라인 루트로 분기
   # ----------------------------
   ONLINE=0
-  if ! ! { python - <<'PY'
+  if python - <<'PY'
 import socket, sys
 try:
     with socket.create_connection(("pypi.org", 443), timeout=3):
-        pass
-    sys.exit(0)
+        sys.exit(0)
 except Exception:
     sys.exit(1)
 PY
-  }; then
-    ONLINE=1
-  fi
+  then ONLINE=1; fi
   echo "[INFO] Network to PyPI: $([ $ONLINE -eq 1 ] && echo ONLINE || echo OFFLINE)"
 
   # pip 공통 옵션(환경변수로 오버라이드 가능)
@@ -243,6 +246,7 @@ PYINFO
     --pipeline-gamma          !{params.pipeline_gamma}
     --pipeline-seed           !{params.pipeline_seed}
     --pipeline-dp-gap-bp      !{params.pipeline_dp_gap_bp}
+    --pipeline-presmooth-bins !{params.pipeline_presmooth_bins}
     --postsel-fdr-method      '!{params.postsel_fdr_method}'
     --postsel-bootstrap       !{params.postsel_bootstrap}
     --postsel-lambda-start    '!{params.postsel_lambda_start}'
@@ -251,12 +255,21 @@ PYINFO
     --postsel-pi0-floor       '!{params.postsel_pi0_floor}'
     --postsel-pi0-ceil        '!{params.postsel_pi0_ceil}'
   )
+
+  # 세그 길이 인자 (비어있지 않을 때만 추가)
   [ -n "$SEGLEN" ] && COMMON_ARGS+=( --segment-lengths $SEGLEN )
 
+  # resume-checkpoint (있을 때만 추가)
+  if [ -n "!{params.resume_checkpoint}" ] && [ "!{params.resume_checkpoint}" != "null" ]; then
+    COMMON_ARGS+=( --resume-checkpoint '!{params.resume_checkpoint}' )
+  fi
+
   FLAGS=()
-  case "!{params.use_mad}"       in true|True|TRUE ) FLAGS+=( --use-mad );; esac
-  case "!{params.label_roll}"    in true|True|TRUE ) FLAGS+=( --label-roll );; esac
-  case "!{params.run_pipeline}"  in true|True|TRUE ) FLAGS+=( --run-pipeline );; esac
+  case "!{params.use_mad}"         in true|True|TRUE ) FLAGS+=( --use-mad );; esac
+  case "!{params.label_roll}"      in true|True|TRUE ) FLAGS+=( --label-roll );; esac
+  case "!{params.save_attention}"  in true|True|TRUE ) FLAGS+=( --save-attention );; esac
+  case "!{params.pipeline_gmm_auto}" in true|True|TRUE ) FLAGS+=( --pipeline-gmm-auto );; esac
+  case "!{params.run_pipeline}"    in true|True|TRUE ) FLAGS+=( --run-pipeline );; esac
 
   # ---- args snapshot (exact tokens) ----
   printf "[ARGS]  " ; printf "%q " "${COMMON_ARGS[@]}" ; echo
