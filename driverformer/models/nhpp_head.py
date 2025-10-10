@@ -1,58 +1,83 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Sun Jun  8 18:41:23 2025
-Updated on Mon Jul  7 19:20:00 2025    ← NEW  (attention‑save policy)
+models/nhpp_head.py — NHPP rate head (safe version)
 
-@author: silverflo
+Updated on Mon Jul  7 19:20:00 2025  ← attention-save policy + safety clamps
 
-Changes in this revision
-------------------------
-* 학습(epoch) 중 : Val‑loss 개선 시 **마지막 레이어 head‑mean 1장** 저장
-* 학습 완료(final): 베스트 모델로 **전체 레이어·헤드** 스택 저장
-* 그 외 로직(길이‑가중 residual sampler, Huber/IRLS 등)은 이전 버전과 동일
+- Transformer 출력 x(B,T,D) → per-kb rate λ(B,T)
+- softplus로 양수 보장
+- exp(log_c) 오버플로우 방지(clamp)
+- 최종 λ는 [rate_min, rate_max]로 클램프 + NaN/Inf 치환
 """
 
-# --------------------------------------------------------------------------- #
-# Imports & setup                                                             #
-# --------------------------------------------------------------------------- #
-import os, sys, math, random, pickle, argparse, gc, itertools
-from functools import partial
-from collections import defaultdict, Counter
-import numpy as np
-import pandas as pd
-from torch.nn.functional import scaled_dot_product_attention
+from __future__ import annotations
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
-from torch.optim import AdamW
-from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
-from rotary_embedding_torch import RotaryEmbedding
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-from pathlib import Path
-from scipy.stats import norm
-from sklearn.mixture import GaussianMixture
-from statsmodels.stats.multitest import fdrcorrection_twostage
-from tqdm import tqdm
-import warnings
-from scipy.special import logsumexp
-from typing import Optional
 
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
-torch.autograd.set_detect_anomaly(True)
+__all__ = ["NHPPHead"]
 
-CHROM_LIST_24 = [f"chr{i}" for i in range(1, 23)] + ["chrX", "chrY"]
-DEBUG_NAN = True  # NaN 디버깅
-
-# --------------------------------------------------------------------------- #
 
 class NHPPHead(nn.Module):
-    def __init__(self, hidden_dim=768):
-        super().__init__(); self.ln = nn.LayerNorm(hidden_dim); self.lin = nn.Linear(hidden_dim, 1)
-        self.log_c  = nn.Parameter(torch.zeros(())) 
-    def forward(self, x):
-        rate = F.softplus(self.lin(self.ln(x))).squeeze(-1)  # (B,L)
-        return (rate * torch.exp(self.log_c)).clamp_min(1e-6)
+    """
+    NHPPHead(hidden_dim=768, rate_min=1e-9, rate_max=1e6, ln_eps=1e-5, softplus_threshold=20.0)
+
+    Args
+    ----
+    hidden_dim : int
+        입력 임베딩 차원(D).
+    rate_min : float
+        λ 하한 (log(λ) 계산 안정성; 0 금지).
+    rate_max : float
+        λ 상한 (수치 폭주 방지).
+    ln_eps : float
+        LayerNorm eps.
+    softplus_threshold : float
+        softplus 안정 임계값(큰 입력에서 선형 근사 사용).
+    """
+    def __init__(
+        self,
+        hidden_dim: int = 768,
+        rate_min: float = 1e-9,
+        rate_max: float = 1e6,
+        ln_eps: float = 1e-5,
+        softplus_threshold: float = 20.0,
+    ):
+        super().__init__()
+        self.ln   = nn.LayerNorm(hidden_dim, eps=ln_eps)
+        self.lin  = nn.Linear(hidden_dim, 1)
+        self.log_c = nn.Parameter(torch.zeros(()))  # 전역 스케일(log)
+        self.rate_min = float(rate_min)
+        self.rate_max = float(rate_max)
+        self.sp_th    = float(softplus_threshold)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        x: (B,T,D) → λ: (B,T)
+        """
+        # LayerNorm + 선형 → softplus로 양수 rate
+        x = self.ln(x.contiguous())
+        rate = F.softplus(self.lin(x), beta=1.0, threshold=self.sp_th).squeeze(-1)  # (B,T) ≥ 0
+
+        # exp(log_c) 안정화 (overflow 방지)
+        scale = torch.exp(self.log_c.clamp(-20, 20))
+
+        lam = rate * scale  # (B,T)
+
+        # NaN/Inf 치환 후 범위 클램프
+        lam = torch.nan_to_num(lam, nan=self.rate_min, posinf=self.rate_max, neginf=self.rate_min)
+        lam = lam.clamp(self.rate_min, self.rate_max)
+
+        return lam
+
+
+if __name__ == "__main__":  # quick sanity
+    B, T, D = 2, 5, 768
+    head = NHPPHead(D)
+    x = torch.randn(B, T, D)
+    out = head(x)
+    assert out.shape == (B, T)
+    assert torch.isfinite(out).all() and (out > 0).all()
+    print("NHPPHead sanity OK:", out.min().item(), out.max().item())
