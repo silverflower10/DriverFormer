@@ -119,6 +119,17 @@ def _dump_batch_stats(tag: str, lam: torch.Tensor, y: torch.Tensor, dt: torch.Te
     }
     print(f"[DBG] {info}", flush=True)
 
+# --- grad sanitizer helper ---------------------------------------------------
+def _attach_grad_sanitizer(t: torch.Tensor) -> torch.Tensor:
+    """
+    backward 시 NaN/Inf gradient가 들어오면 0으로 치환해 전파 차단.
+    주의: lam처럼 '롤링'으로 새 텐서가 만들어지면 훅이 사라지므로
+    롤링 이후에도 다시 호출해야 한다.
+    """
+    if t.requires_grad:
+        t.register_hook(lambda g: torch.nan_to_num(g, nan=0.0, posinf=0.0, neginf=0.0))
+    return t
+
 # ===== Calibration (Huber-like) =============================================
 @torch.no_grad()
 def calibrate_log_c_huber_like_training(model_c, loader, device,
@@ -431,12 +442,15 @@ def train_and_predict(args):
 
             out = out.contiguous()
             lam = _safe_rate_(model_components["nhpp_head"](out))
-            if lam.requires_grad:
-                lam.register_hook(lambda g: torch.nan_to_num(g, nan=0.0, posinf=0.0, neginf=0.0))
+            lam = _attach_grad_sanitizer(lam)  # ★ 1차 훅(롤링 전)
 
+            # roll(창 합) 사용 시 lam,y,len을 동일 창으로 변환 후 다시 안전화
             if args.label_roll and args.label_roll_width > 1:
                 lam, y_b, len_b = R.rolling_sum_nhpp(lam, y_b, len_b, width=args.label_roll_width)
-                lam   = _safe_rate_(lam); y_b = _safe_count_(y_b); len_b = _safe_len_(len_b)
+                lam   = _safe_rate_(lam)
+                lam   = _attach_grad_sanitizer(lam)  # ★ 2차 훅(롤링 후 새 lam에도 재부착)
+                y_b   = _safe_count_(y_b)
+                len_b = _safe_len_(len_b)
 
             w_seg = torch.tensor([seg_weight_dict.get(seg["global_idx"], 1.0) for seg in batch["raw_segments"]],
                                  device=device, dtype=torch.float32)
@@ -538,8 +552,6 @@ def train_and_predict(args):
                         out = model_components["global_transformer"](fused + chr_emb, key_padding_mask=key_pad)
                         out = out.contiguous()
                         lam = _safe_rate_(model_components["nhpp_head"](out))
-                        if lam.requires_grad:
-                            lam.register_hook(lambda g: torch.nan_to_num(g, nan=0.0, posinf=0.0, neginf=0.0))
 
                         if args.label_roll and args.label_roll_width > 1:
                             lam, y_b, len_b = R.rolling_sum_nhpp(lam, y_b, len_b, width=args.label_roll_width)
@@ -550,6 +562,7 @@ def train_and_predict(args):
                         for i, seg in enumerate(b["raw_segments"]):
                             L = seg["cls_array"].shape[0]
                             res[seg["global_idx"]] = float((y_np[i, :L] - mu_np[i, :L]).mean())
+
                 rs = np.array(list(res.values()), dtype=np.float64)
                 scale = compute_mad(rs) if args.use_mad else compute_iqr(rs)
                 if not np.isfinite(scale) or scale <= 0: scale = 1.0
@@ -771,7 +784,7 @@ def train_and_predict(args):
                 sum_log  = (y_b * torch.log(lam)).sum(dim=1)
                 integ    = (lam * len_b).sum(dim=1)
                 neg_ll   = -(sum_log - integ)
-                seg_len  = (len_b.sum(dim=1) + 1e-9)
+                seg_len  = (len_b.sum(dim=1) + _EPS)
                 per_seg  = (neg_ll / seg_len) * 30.0
 
                 ids = [seg["global_idx"] for seg in b["raw_segments"]]
