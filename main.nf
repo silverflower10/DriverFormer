@@ -239,7 +239,6 @@ PYINFO
     --len-alpha           !{params.len_alpha}
     --res-beta            !{params.res_beta}
     --label-roll-width    !{params.label_roll_width}
-    --log-interval        !{params.log_interval}
     --pipeline-out-dir        '!{params.pipeline_out_dir}'
     --pipeline-chunk-size     !{params.pipeline_chunk_size}
     --pipeline-chunk-overlap  !{params.pipeline_chunk_overlap}
