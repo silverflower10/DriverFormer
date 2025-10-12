@@ -35,9 +35,6 @@ params.label_roll_width = params.label_roll_width ?: 2
 params.save_attention   = (params.save_attention in [true,'true',1,'1']) ? true : false
 params.resume_checkpoint= params.resume_checkpoint?: null
 
-// (NEW) log interval for mid-epoch prints
-params.log_interval     = params.log_interval     ?: 200
-
 params.run_pipeline           = (params.run_pipeline in [false,'false',0,'0']) ? false : true
 params.pipeline_out_dir       = params.pipeline_out_dir       ?: "${params.out_dir}/postproc_k_auto"
 params.pipeline_chunk_size    = params.pipeline_chunk_size    ?: 1000000
