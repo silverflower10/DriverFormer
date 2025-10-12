@@ -35,6 +35,9 @@ params.label_roll_width = params.label_roll_width ?: 2
 params.save_attention   = (params.save_attention in [true,'true',1,'1']) ? true : false
 params.resume_checkpoint= params.resume_checkpoint?: null
 
+// (NEW) log interval for mid-epoch prints
+params.log_interval     = params.log_interval     ?: 200
+
 params.run_pipeline           = (params.run_pipeline in [false,'false',0,'0']) ? false : true
 params.pipeline_out_dir       = params.pipeline_out_dir       ?: "${params.out_dir}/postproc_k_auto"
 params.pipeline_chunk_size    = params.pipeline_chunk_size    ?: 1000000
@@ -86,11 +89,14 @@ process DRIVERFORMER_RUN {
   output:
     path "stdout.txt"
     path "stderr.txt"
+    path "train.log"
 
   shell:
   '''
   set -euo pipefail
   SEGLEN="${SEGLEN:-}"
+
+  # ---- live stream to console & files ----
   exec > >(tee stdout.txt) 2> >(tee stderr.txt >&2)
 
   # ==== workspace/TMP 설정 (/dev/shm 압박 완화) ====
@@ -112,6 +118,7 @@ process DRIVERFORMER_RUN {
   export MKL_NUM_THREADS=!{task.cpus}
   export OPENBLAS_NUM_THREADS=!{task.cpus}
   export NUMEXPR_NUM_THREADS=!{task.cpus}
+  export PYTHONUNBUFFERED=1
   export PYTHONPATH="$PWD:$PWD/driverformer${PYTHONPATH:+:$PYTHONPATH}"
   echo "[INFO] PYTHONPATH head = $(echo "$PYTHONPATH" | tr ':' '\n' | head -n 3)"
 
@@ -138,7 +145,7 @@ PY
   then ONLINE=1; fi
   echo "[INFO] Network to PyPI: $([ $ONLINE -eq 1 ] && echo ONLINE || echo OFFLINE)"
 
-  # pip 공통 옵션(환경변수로 오버라이드 가능)
+  # pip 공통 옵션
   : "${PIP_INDEX_URL:=https://pypi.org/simple}"
   : "${PIP_TRUSTED_HOST:=pypi.org files.pythonhosted.org}"
   PIP_OPTS=( --no-cache-dir --retries 5 --timeout 90 --progress-bar off )
@@ -155,7 +162,7 @@ except Exception as e:
     print("[WARN] set_sharing_strategy failed:", e)
 PY
 
-  # constraints(제약) 파일: solver 폭주 방지용 최소 버전 고정
+  # constraints
   cat > constraints.txt <<'REQ'
 matplotlib==3.8.4
 fonttools==4.53.1
@@ -235,6 +242,7 @@ PYINFO
     --len-alpha           !{params.len_alpha}
     --res-beta            !{params.res_beta}
     --label-roll-width    !{params.label_roll_width}
+    --log-interval        !{params.log_interval}
     --pipeline-out-dir        '!{params.pipeline_out_dir}'
     --pipeline-chunk-size     !{params.pipeline_chunk_size}
     --pipeline-chunk-overlap  !{params.pipeline_chunk_overlap}
@@ -265,11 +273,11 @@ PYINFO
   fi
 
   FLAGS=()
-  case "!{params.use_mad}"         in true|True|TRUE ) FLAGS+=( --use-mad );; esac
-  case "!{params.label_roll}"      in true|True|TRUE ) FLAGS+=( --label-roll );; esac
-  case "!{params.save_attention}"  in true|True|TRUE ) FLAGS+=( --save-attention );; esac
+  case "!{params.use_mad}"           in true|True|TRUE ) FLAGS+=( --use-mad );; esac
+  case "!{params.label_roll}"        in true|True|TRUE ) FLAGS+=( --label-roll );; esac
+  case "!{params.save_attention}"    in true|True|TRUE ) FLAGS+=( --save-attention );; esac
   case "!{params.pipeline_gmm_auto}" in true|True|TRUE ) FLAGS+=( --pipeline-gmm-auto );; esac
-  case "!{params.run_pipeline}"    in true|True|TRUE ) FLAGS+=( --run-pipeline );; esac
+  case "!{params.run_pipeline}"      in true|True|TRUE ) FLAGS+=( --run-pipeline );; esac
 
   # ---- args snapshot (exact tokens) ----
   printf "[ARGS]  " ; printf "%q " "${COMMON_ARGS[@]}" ; echo
@@ -279,10 +287,11 @@ PYINFO
   # ---- run: module preferred, fallback to staged script ----
   if python -c 'import importlib.util, sys; sys.exit(0 if importlib.util.find_spec("driverformer") else 1)'; then
     echo "[RUN] python -m driverformer ..."
-    set -x; python -u -m driverformer "${COMMON_ARGS[@]}" "${FLAGS[@]}"; set +x
+    # 학습 로그를 파일에도 별도로 축적 (중간 tail 용)
+    set -x; python -u -m driverformer "${COMMON_ARGS[@]}" "${FLAGS[@]}" 2>&1 | tee -a train.log; set +x
   elif [ -f "trainDriverFormer.py" ]; then
     echo "[RUN] python trainDriverFormer.py ..."
-    set -x; python -u "trainDriverFormer.py" "${COMMON_ARGS[@]}" "${FLAGS[@]}"; set +x
+    set -x; python -u "trainDriverFormer.py" "${COMMON_ARGS[@]}" "${FLAGS[@]}" 2>&1 | tee -a train.log; set +x
   else
     echo "[ERROR] Neither 'driverformer' package nor 'trainDriverFormer.py' staged."
     exit 2
