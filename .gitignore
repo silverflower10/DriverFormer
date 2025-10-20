@@ -40,3 +40,17 @@ wheels/*cusolver*.whl
 wheels/*nccl*.whl
 # also avoid wrong-Python wheels
 wheels/*cp39*.whl
+# === BORI/DriverFormer ignores ===
+data/
+*.npz
+*.npy
+*.pt
+*.ckpt
+*.pkl
+*.pkl.gz
+*.log
+logs/
+outputs/
+result/
+__pycache__/
+.ipynb_checkpoints/

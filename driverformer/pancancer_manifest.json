@@ -1,0 +1,128 @@
+[
+  {
+    "organ": "Biliary_tract",
+    "organ_id": 0,
+    "cls_file": "/home/silverflo/BORI/data/cls_embedding.pkl",
+    "feat_file": "/home/silverflo/BORI/data/cov_organ_emb/Biliary_tract/feature_dict_Biliary_tract.pkl",
+    "mutations_file": "/home/silverflo/BORI/data/mut_organ/Biliary_tract/BTCA/mutations.csv"
+  },
+  {
+    "organ": "Bladder",
+    "organ_id": 1,
+    "cls_file": "/home/silverflo/BORI/data/cls_embedding.pkl",
+    "feat_file": "/home/silverflo/BORI/data/cov_organ_emb/Bladder/feature_dict_Bladder.pkl",
+    "mutations_file": "/home/silverflo/BORI/data/mut_organ/Bladder/BLCA/mutations.csv"
+  },
+  {
+    "organ": "Bone_Soft_tissue",
+    "organ_id": 2,
+    "cls_file": "/home/silverflo/BORI/data/cls_embedding.pkl",
+    "feat_file": "/home/silverflo/BORI/data/cov_organ_emb/Bone_Soft_tissue/feature_dict_Bone_Soft_tissue.pkl",
+    "mutations_file": "/home/silverflo/BORI/data/mut_organ/Bone_Soft_tissue/SARC/mutations.csv"
+  },
+  {
+    "organ": "Brain_CNS",
+    "organ_id": 3,
+    "cls_file": "/home/silverflo/BORI/data/cls_embedding.pkl",
+    "feat_file": "/home/silverflo/BORI/data/cov_organ_emb/Brain_CNS/feature_dict_Brain_CNS.pkl",
+    "mutations_file": "/home/silverflo/BORI/data/mut_organ/Brain_CNS/CNS/mutations.csv"
+  },
+  {
+    "organ": "Breast",
+    "organ_id": 4,
+    "cls_file": "/home/silverflo/BORI/data/cls_embedding.pkl",
+    "feat_file": "/home/silverflo/BORI/data/cov_organ_emb/Breast/feature_dict_Breast.pkl",
+    "mutations_file": "/home/silverflo/BORI/data/mut_organ/Breast/BRCA/mutations.csv"
+  },
+  {
+    "organ": "Colorectal",
+    "organ_id": 5,
+    "cls_file": "/home/silverflo/BORI/data/cls_embedding.pkl",
+    "feat_file": "/home/silverflo/BORI/data/cov_organ_emb/Colorectal/feature_dict_Colorectal.pkl",
+    "mutations_file": "/home/silverflo/BORI/data/mut_organ/Colorectal/COREAD/mutations.csv"
+  },
+  {
+    "organ": "Esophagus",
+    "organ_id": 6,
+    "cls_file": "/home/silverflo/BORI/data/cls_embedding.pkl",
+    "feat_file": "/home/silverflo/BORI/data/cov_organ_emb/Esophagus/feature_dict_Esophagus.pkl",
+    "mutations_file": "/home/silverflo/BORI/data/mut_organ/Esophagus/mutations.csv"
+  },
+  {
+    "organ": "Head_and_Neck",
+    "organ_id": 7,
+    "cls_file": "/home/silverflo/BORI/data/cls_embedding.pkl",
+    "feat_file": "/home/silverflo/BORI/data/cov_organ_emb/Head_and_Neck/feature_dict_Head_and_Neck.pkl",
+    "mutations_file": "/home/silverflo/BORI/data/mut_organ/Head_and_Neck/HNSC/mutations.csv"
+  },
+  {
+    "organ": "Kidney",
+    "organ_id": 8,
+    "cls_file": "/home/silverflo/BORI/data/cls_embedding.pkl",
+    "feat_file": "/home/silverflo/BORI/data/cov_organ_emb/Kidney/feature_dict_Kidney.pkl",
+    "mutations_file": "/home/silverflo/BORI/data/mut_organ/Kidney/KIRC/mutations.csv"
+  },
+  {
+    "organ": "Liver",
+    "organ_id": 9,
+    "cls_file": "/home/silverflo/BORI/data/cls_embedding.pkl",
+    "feat_file": "/home/silverflo/BORI/data/cov_organ_emb/Liver/feature_dict_Liver.pkl",
+    "mutations_file": "/home/silverflo/BORI/data/mut_organ/Liver/LIHC/mutations.csv"
+  },
+  {
+    "organ": "Lung",
+    "organ_id": 10,
+    "cls_file": "/home/silverflo/BORI/data/cls_embedding.pkl",
+    "feat_file": "/home/silverflo/BORI/data/cov_organ_emb/Lung/feature_dict_Lung.pkl",
+    "mutations_file": "/home/silverflo/BORI/data/mut_organ/Lung/LUAD/mutations.csv"
+  },
+  {
+    "organ": "Lymphoid",
+    "organ_id": 11,
+    "cls_file": "/home/silverflo/BORI/data/cls_embedding.pkl",
+    "feat_file": "/home/silverflo/BORI/data/cov_organ_emb/Lymphoid/feature_dict_Lymphoid.pkl",
+    "mutations_file": "/home/silverflo/BORI/data/mut_organ/Lymphoid/mutations.csv"
+  },
+  {
+    "organ": "Ovary",
+    "organ_id": 12,
+    "cls_file": "/home/silverflo/BORI/data/cls_embedding.pkl",
+    "feat_file": "/home/silverflo/BORI/data/cov_organ_emb/Ovary/feature_dict_Ovary.pkl",
+    "mutations_file": "/home/silverflo/BORI/data/mut_organ/Ovary/OV/mutations.csv"
+  },
+  {
+    "organ": "Pancreas_Neuroendocrine",
+    "organ_id": 13,
+    "cls_file": "/home/silverflo/BORI/data/cls_embedding.pkl",
+    "feat_file": "/home/silverflo/BORI/data/cov_organ_emb/Pancreas_Neuroendocrine/feature_dict_Pancreas_Neuroendocrine.pkl",
+    "mutations_file": "/home/silverflo/BORI/data/mut_organ/Pancreas_Neuroendocrine/PANET/mutations.csv"
+  },
+  {
+    "organ": "Prostate",
+    "organ_id": 14,
+    "cls_file": "/home/silverflo/BORI/data/cls_embedding.pkl",
+    "feat_file": "/home/silverflo/BORI/data/cov_organ_emb/Prostate/feature_dict_Prostate.pkl",
+    "mutations_file": "/home/silverflo/BORI/data/mut_organ/Prostate/PRAD/mutations.csv"
+  },
+  {
+    "organ": "Skin",
+    "organ_id": 15,
+    "cls_file": "/home/silverflo/BORI/data/cls_embedding.pkl",
+    "feat_file": "/home/silverflo/BORI/data/cov_organ_emb/Skin/feature_dict_Skin.pkl",
+    "mutations_file": "/home/silverflo/BORI/data/mut_organ/Skin/SKCM/mutations.csv"
+  },
+  {
+    "organ": "Stomach",
+    "organ_id": 16,
+    "cls_file": "/home/silverflo/BORI/data/cls_embedding.pkl",
+    "feat_file": "/home/silverflo/BORI/data/cov_organ_emb/Stomach/feature_dict_Stomach.pkl",
+    "mutations_file": "/home/silverflo/BORI/data/mut_organ/Stomach/STAD/mutations.csv"
+  },
+  {
+    "organ": "Uterus",
+    "organ_id": 17,
+    "cls_file": "/home/silverflo/BORI/data/cls_embedding.pkl",
+    "feat_file": "/home/silverflo/BORI/data/cov_organ_emb/Uterus/feature_dict_Uterus.pkl",
+    "mutations_file": "/home/silverflo/BORI/data/mut_organ/Uterus/UCEC/mutations.csv"
+  }
+]
