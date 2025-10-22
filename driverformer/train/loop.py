@@ -798,12 +798,11 @@ def pretrain_and_predict(args):
     if _before - len(segs) > 0:
         print(f"[FILTER:{ORGAN_NAME}] dropped {_before-len(segs):,} non-24chr segments", flush=True)
 
-    _print_size_hist("BASE", ORGAN_NAME, segs)
-    rng_sub = random.Random(args.seed + 131)
-    _print_size_hist("SUBSP", ORGAN_NAME, segs)
-    rng_ref = random.Random(args.seed + 911)
+    # 콘솔 잡음 줄이기: 사이즈 히스토그램 출력 생략
     segs = refine_100k_segments_for_organ(segs, frac=0.10, mode="half", keep_original=True, rng=rng_ref)
-    _print_size_hist("REFIN", ORGAN_NAME, segs)
+    for gid, s in enumerate(segs):
+      s["global_idx"] = gid
+
 
     # split (chrom-level)
     train_segs, val_segs = [], []
@@ -961,7 +960,7 @@ def pretrain_and_predict(args):
     
 
     # ----------------------------- Training loop -------------------------- #
-    FORCE_DEBUG_FIRST_BATCH = True
+    FORCE_DEBUG_FIRST_BATCH = False
     max_grad_norm     = 1.0
     log_interval      = 1000
     step_global       = 0
@@ -1140,7 +1139,7 @@ def pretrain_and_predict(args):
                     with torch.no_grad():
                         # alpha_dbg: (B,T,1), valid: (B,T,1)
                         len_kb_bt = _safe_len_(batch["length_array"].to(alpha_dbg.device))  # (B,T)
-                        valid_bt1 = (len_kb_bt > 0).unsqueeze(-1)                            # (B,T,1)
+                        valid_bt1 = (len_kb_bt > 0).unsqueeze(-1)                            # (a100B,T,1)
 
                         # 각 샘플(세그먼트)별 α 평균: pad 제외
                         denom_b1 = valid_bt1.sum(dim=1).clamp_min(1.0)                      # (B,1)
@@ -1182,15 +1181,10 @@ def pretrain_and_predict(args):
 
                 _csv_append_row(step_alpha_csv, alpha_header, alpha_row)
                 _csv_append_row(step_loss_csv,  loss_header,  loss_row)
-
-                # 콘솔 표시는 유지
-                vals = list(po_loss.values()); po_mean = float(np.mean(vals)) if vals else float('nan'); po_std = float(np.std(vals)) if vals else float('nan')
-                po_table   = _format_per_organ_table(po_loss, cols=3, order="desc", name_max=16)
-                po_alpha_t = _format_per_organ_table(po_alpha, cols=3, order="desc", name_max=16, val_fmt="{:>7.3f}")
+                # === 콘솔: 요약 1줄만 출력 (seglen별 α는 괄호로만 표시) ===
                 print(
                     f"[Epoch {epoch} | Step {step_global}] loss={avg:.4f}  "
-                    f"(per-organ loss mean±sd={po_mean:.3f}±{po_std:.3f})\n"
-                    f"{po_table}\n[α per-organ (mean)]\n{po_alpha_t}",
+                    f"alpha={alpha_mean:.3f}  (10k:{a10:.3f} 50k:{a50:.3f} 100k:{a100:.3f})",
                     flush=True,
                 )
 
